@@ -217,6 +217,30 @@ export const VotingMethodViz = () => {
         setIsDragging(null);
     };
 
+    const updateCandidatePosition = (id: string, newX: number, newY: number) => {
+        // Clamp values between 0 and 1
+        const x = Math.max(0, Math.min(1, newX));
+        const y = Math.max(0, Math.min(1, newY));
+
+        setCandidates(candidates.map(c =>
+            c.id === id ? { ...c, x, y } : c
+        ));
+    };
+
+    const handleCoordinateInput = (id: string, coord: 'x' | 'y', value: string) => {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue)) return;
+
+        const candidate = candidates.find(c => c.id === id);
+        if (!candidate) return;
+
+        updateCandidatePosition(
+            id,
+            coord === 'x' ? numValue : candidate.x,
+            coord === 'y' ? numValue : candidate.y
+        );
+    };
+
     return (
         <div className="w-full max-w-6xl p-4 bg-white rounded-lg shadow-lg">
             <div className="flex justify-between items-start mb-4">
@@ -254,17 +278,39 @@ export const VotingMethodViz = () => {
                             <h3 className="font-semibold mb-2">Candidates</h3>
                             <div className="space-y-2">
                                 {candidates.map((candidate) => (
-                                    <div key={candidate.id} className="flex items-center gap-2">
+                                    <div key={candidate.id} className="flex flex-wrap items-center gap-2 p-2 border rounded bg-white">
                                         <div className="w-4 h-4 rounded-full" style={{ backgroundColor: candidate.color }}></div>
                                         <input
                                             type="text"
                                             value={candidate.name}
                                             onChange={(e) => updateCandidateName(candidate.id, e.target.value)}
-                                            className="px-2 py-1 border rounded"
+                                            className="px-2 py-1 border rounded w-32"
                                         />
+                                        <div className="flex items-center gap-2">
+                                            <label className="text-sm">X:</label>
+                                            <input
+                                                type="number"
+                                                value={candidate.x.toFixed(2)}
+                                                onChange={(e) => handleCoordinateInput(candidate.id, 'x', e.target.value)}
+                                                step="0.05"
+                                                min="0"
+                                                max="1"
+                                                className="px-2 py-1 border rounded w-20"
+                                            />
+                                            <label className="text-sm">Y:</label>
+                                            <input
+                                                type="number"
+                                                value={candidate.y.toFixed(2)}
+                                                onChange={(e) => handleCoordinateInput(candidate.id, 'y', e.target.value)}
+                                                step="0.05"
+                                                min="0"
+                                                max="1"
+                                                className="px-2 py-1 border rounded w-20"
+                                            />
+                                        </div>
                                         <button
                                             onClick={() => removeCandidate(candidate.id)}
-                                            className="px-2 py-1 text-red-600 hover:bg-red-50 rounded"
+                                            className="px-2 py-1 text-red-600 hover:bg-red-50 rounded ml-auto"
                                         >
                                             Remove
                                         </button>
@@ -277,6 +323,13 @@ export const VotingMethodViz = () => {
                                 >
                                     Add Candidate
                                 </button>
+                            </div>
+                            <div className="mt-2 text-sm text-gray-600">
+                                <p>Tip: You can adjust positions by either:</p>
+                                <ul className="list-disc ml-4">
+                                    <li>Dragging the circles on the visualization</li>
+                                    <li>Entering coordinates (0-1 range for both X and Y)</li>
+                                </ul>
                             </div>
                         </div>
 
