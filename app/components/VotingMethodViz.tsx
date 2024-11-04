@@ -186,15 +186,20 @@ export const VotingMethodViz = () => {
         if (!canvas) return;
 
         const rect = canvas.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / canvas.width;
-        const y = 1 - (e.clientY - rect.top) / canvas.height;
+        // Account for any scaling between canvas internal size and displayed size
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+
+        const x = ((e.clientX - rect.left) * scaleX) / canvas.width;
+        const y = 1 - ((e.clientY - rect.top) * scaleY) / canvas.height;
 
         const clickedCandidate = candidates.find(candidate =>
-            distance(x, y, candidate.x, candidate.y) < 0.05
+            distance(x, y, candidate.x, candidate.y) < 0.1  // Increased click detection area
         );
 
         if (clickedCandidate) {
             setIsDragging(clickedCandidate.id);
+            e.preventDefault(); // Prevent text selection while dragging
         }
     };
 
@@ -204,12 +209,21 @@ export const VotingMethodViz = () => {
             if (!canvas) return;
 
             const rect = canvas.getBoundingClientRect();
-            const x = (e.clientX - rect.left) / canvas.width;
-            const y = 1 - (e.clientY - rect.top) / canvas.height;
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+
+            const x = ((e.clientX - rect.left) * scaleX) / canvas.width;
+            const y = 1 - ((e.clientY - rect.top) * scaleY) / canvas.height;
+
+            // Clamp the values between 0 and 1
+            const clampedX = Math.max(0, Math.min(1, x));
+            const clampedY = Math.max(0, Math.min(1, y));
 
             setCandidates(candidates.map(candidate =>
-                candidate.id === isDragging ? { ...candidate, x, y } : candidate
+                candidate.id === isDragging ? { ...candidate, x: clampedX, y: clampedY } : candidate
             ));
+
+            e.preventDefault(); // Prevent text selection while dragging
         }
     };
 
@@ -241,6 +255,36 @@ export const VotingMethodViz = () => {
         );
     };
 
+    const calculateWinner = (method: keyof typeof votingMethods) => {
+        const samplePoints = 50; // Number of points to sample in each dimension
+        const votes = new Map<string, number>();
+        candidates.forEach(c => votes.set(c.id, 0));
+
+        // Sample points across the map
+        for (let x = 0; x < samplePoints; x++) {
+            for (let y = 0; y < samplePoints; y++) {
+                const voterX = x / (samplePoints - 1);
+                const voterY = y / (samplePoints - 1);
+                const winnerId = votingMethods[method](voterX, voterY);
+                votes.set(winnerId, votes.get(winnerId)! + 1);
+            }
+        }
+
+        // Find the winner
+        const winner = [...votes.entries()].reduce((a, b) =>
+            a[1] > b[1] ? a : b
+        );
+
+        const totalVotes = [...votes.values()].reduce((a, b) => a + b, 0);
+        const winnerPercentage = (winner[1] / totalVotes) * 100;
+
+        return {
+            winnerId: winner[0],
+            percentage: winnerPercentage,
+            votes: Object.fromEntries(votes)
+        };
+    };
+
     return (
         <div className="w-full max-w-6xl p-4 bg-white rounded-lg shadow-lg">
             <div className="flex justify-between items-start mb-4">
@@ -268,6 +312,31 @@ export const VotingMethodViz = () => {
                     <p className="mt-2 text-gray-600">
                         {methodDescriptions[selectedMethod as keyof typeof methods]}
                     </p>
+                </div>
+            </div>
+
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                <h3 className="font-semibold mb-2">Election Results</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {Object.entries(methods).map(([method, label]) => {
+                        const result = calculateWinner(method as keyof typeof votingMethods);
+                        const winner = candidates.find(c => c.id === result.winnerId);
+                        return (
+                            <div key={method} className={`p-3 rounded-lg border ${method === selectedMethod ? 'bg-white border-blue-500' : 'bg-white'}`}>
+                                <div className="font-medium">{label}</div>
+                                <div className="flex items-center gap-2 mt-1">
+                                    <div
+                                        className="w-3 h-3 rounded-full"
+                                        style={{ backgroundColor: winner?.color }}
+                                    />
+                                    <span>{winner?.name}</span>
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                    {result.percentage.toFixed(1)}% of the area
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -360,7 +429,8 @@ export const VotingMethodViz = () => {
                     ref={canvasRef}
                     width={400}
                     height={400}
-                    className="w-full border rounded cursor-pointer"
+                    className="w-full border rounded cursor-move"
+                    style={{ touchAction: 'none' }}
                     onMouseDown={handleCanvasMouseDown}
                     onMouseMove={handleCanvasMouseMove}
                     onMouseUp={handleCanvasMouseUp}
