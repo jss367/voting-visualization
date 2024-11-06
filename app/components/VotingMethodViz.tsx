@@ -1,7 +1,5 @@
 "use client"
-
-import React, { useEffect, useRef, useState } from 'react';
-
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 interface Candidate {
     id: string;
     x: number;
@@ -23,184 +21,6 @@ interface ElectionResult {
     eliminated?: string[];
 }
 
-const [voters, setVoters] = useState<Voter[]>([]);
-const [voterCount, setVoterCount] = useState(100);
-const [voterDistribution, setVoterDistribution] = useState<'uniform' | 'normal' | 'clustered'>('uniform');
-
-
-const generateVoters = (count: number, distribution: 'uniform' | 'normal' | 'clustered') => {
-    const newVoters: Voter[] = [];
-
-    for (let i = 0; i < count; i++) {
-        let x: number, y: number;
-
-        switch (distribution) {
-            case 'normal':
-                // Generate normally distributed voters around the center
-                x = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
-                y = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
-                break;
-
-            case 'clustered':
-                // Create 2-3 clusters
-                const clusters = [[0.3, 0.3], [0.7, 0.7], [0.5, 0.5]];
-                const cluster = clusters[Math.floor(Math.random() * clusters.length)];
-                x = Math.min(1, Math.max(0, cluster[0] + (randn_bm() * 0.2)));
-                y = Math.min(1, Math.max(0, cluster[1] + (randn_bm() * 0.2)));
-                break;
-
-            default: // uniform
-                x = Math.random();
-                y = Math.random();
-        }
-
-        newVoters.push({
-            id: `voter-${i}`,
-            x,
-            y
-        });
-    }
-
-    return newVoters;
-};
-
-// Helper function for normal distribution
-const randn_bm = () => {
-    let u = 0, v = 0;
-    while (u === 0) u = Math.random();
-    while (v === 0) v = Math.random();
-    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-};
-
-// Modify the voting methods to use actual voters
-const runElection = (method: keyof typeof votingMethods): ElectionResult => {
-    switch (method) {
-        case 'plurality':
-            return runPluralityElection();
-        case 'approval':
-            return runApprovalElection();
-        case 'borda':
-            return runBordaElection();
-        case 'irv':
-            return runIRVElection();
-        default:
-            throw new Error(`Unknown method: ${method}`);
-    }
-};
-
-const runPluralityElection = (): ElectionResult => {
-    const votes: Record<string, number> = {};
-    candidates.forEach(c => votes[c.id] = 0);
-
-    voters.forEach(voter => {
-        const pref = getVoterPreference(voter.x, voter.y);
-        votes[pref[0].id]++;
-    });
-
-    const winnerId = Object.entries(votes)
-        .reduce((a, b) => a[1] > b[1] ? a : b)[0];
-
-    return {
-        winnerId,
-        votes,
-        roundDetails: [`Total votes: ${voters.length}`]
-    };
-};
-
-const runApprovalElection = (): ElectionResult => {
-    const votes: Record<string, number> = {};
-    candidates.forEach(c => votes[c.id] = 0);
-
-    voters.forEach(voter => {
-        const prefs = getVoterPreference(voter.x, voter.y);
-        prefs.forEach(p => {
-            if (p.dist <= approvalThreshold) {
-                votes[p.id]++;
-            }
-        });
-    });
-
-    const winnerId = Object.entries(votes)
-        .reduce((a, b) => a[1] > b[1] ? a : b)[0];
-
-    return {
-        winnerId,
-        votes,
-        roundDetails: [`Average approvals per voter: ${(Object.values(votes).reduce((a, b) => a + b, 0) / voters.length).toFixed(2)}`]
-    };
-};
-
-const runBordaElection = (): ElectionResult => {
-    const votes: Record<string, number> = {};
-    candidates.forEach(c => votes[c.id] = 0);
-
-    voters.forEach(voter => {
-        const prefs = getVoterPreference(voter.x, voter.y);
-        prefs.forEach((p, i) => {
-            votes[p.id] += candidates.length - 1 - i;
-        });
-    });
-
-    const winnerId = Object.entries(votes)
-        .reduce((a, b) => a[1] > b[1] ? a : b)[0];
-
-    return {
-        winnerId,
-        votes,
-        roundDetails: [`Total Borda points: ${Object.values(votes).reduce((a, b) => a + b, 0)}`]
-    };
-};
-
-const runIRVElection = (): ElectionResult => {
-    let remainingCandidates = [...candidates];
-    const roundDetails: string[] = [];
-    const eliminated: string[] = [];
-
-    while (remainingCandidates.length > 1) {
-        const roundVotes: Record<string, number> = {};
-        remainingCandidates.forEach(c => roundVotes[c.id] = 0);
-
-        // Count first preferences among remaining candidates
-        voters.forEach(voter => {
-            const prefs = getVoterPreference(voter.x, voter.y)
-                .filter(p => remainingCandidates.some(c => c.id === p.id));
-            roundVotes[prefs[0].id]++;
-        });
-
-        // Check for majority
-        const majorityNeeded = voters.length / 2;
-        const leader = Object.entries(roundVotes)
-            .reduce((a, b) => a[1] > b[1] ? a : b);
-
-        if (leader[1] > majorityNeeded) {
-            return {
-                winnerId: leader[0],
-                votes: roundVotes,
-                roundDetails: [...roundDetails, `Final round: ${leader[0]} wins with ${leader[1]} votes`],
-                eliminated
-            };
-        }
-
-        // Eliminate last place
-        const loser = Object.entries(roundVotes)
-            .reduce((a, b) => a[1] < b[1] ? a : b);
-        remainingCandidates = remainingCandidates.filter(c => c.id !== loser[0]);
-        eliminated.push(loser[0]);
-
-        roundDetails.push(
-            `Round ${roundDetails.length + 1}: ${loser[0]} eliminated with ${loser[1]} votes`
-        );
-    }
-
-    return {
-        winnerId: remainingCandidates[0].id,
-        votes: { [remainingCandidates[0].id]: voters.length },
-        roundDetails,
-        eliminated
-    };
-};
-
-
 export const VotingMethodViz = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [candidates, setCandidates] = useState<Candidate[]>([
@@ -212,6 +32,10 @@ export const VotingMethodViz = () => {
     const [isDragging, setIsDragging] = useState<string | null>(null);
     const [approvalThreshold, setApprovalThreshold] = useState(0.3);
     const [showSettings, setShowSettings] = useState(false);
+    const [voters, setVoters] = useState<Voter[]>([]);
+    const [voterCount, setVoterCount] = useState(100);
+    const [voterDistribution, setVoterDistribution] = useState<'uniform' | 'normal' | 'clustered'>('uniform');
+    const [electionResults, setElectionResults] = useState<ElectionResult | null>(null);
 
     const availableColors = [
         '#22c55e', '#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6',
@@ -232,6 +56,13 @@ export const VotingMethodViz = () => {
         irv: "Voters rank by distance. If no majority, eliminate last place and retry with remaining candidates."
     };
 
+    const randn_bm = () => {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    };
+
     const distance = (x1: number, y1: number, x2: number, y2: number): number =>
         Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 
@@ -243,39 +74,173 @@ export const VotingMethodViz = () => {
         return distances.sort((a, b) => a.dist - b.dist);
     };
 
-    const votingMethods = {
-        plurality: (voterX: number, voterY: number) => {
-            const pref = getVoterPreference(voterX, voterY);
-            return pref[0].id;
-        },
+    const generateVoters = useCallback((count: number, distribution: 'uniform' | 'normal' | 'clustered') => {
+        const newVoters: Voter[] = [];
 
-        approval: (voterX: number, voterY: number) => {
-            const pref = getVoterPreference(voterX, voterY);
-            return pref.find(p => p.dist <= approvalThreshold)?.id ?? pref[0].id;
-        },
+        for (let i = 0; i < count; i++) {
+            let x: number, y: number;
 
-        borda: (voterX: number, voterY: number) => {
-            const pref = getVoterPreference(voterX, voterY);
-            const scores = new Map<string, number>();
-            candidates.forEach(c => scores.set(c.id, 0));
-            pref.forEach((p, i) => {
-                scores.set(p.id, candidates.length - 1 - i);
+            switch (distribution) {
+                case 'normal':
+                    x = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
+                    y = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
+                    break;
+
+                case 'clustered':
+                    const clusters = [[0.3, 0.3], [0.7, 0.7], [0.5, 0.5]];
+                    const cluster = clusters[Math.floor(Math.random() * clusters.length)];
+                    x = Math.min(1, Math.max(0, cluster[0] + (randn_bm() * 0.2)));
+                    y = Math.min(1, Math.max(0, cluster[1] + (randn_bm() * 0.2)));
+                    break;
+
+                default: // uniform
+                    x = Math.random();
+                    y = Math.random();
+            }
+
+            newVoters.push({
+                id: `voter-${i}`,
+                x,
+                y
             });
-            return [...scores.entries()].reduce((a, b) => scores.get(a)! > scores.get(b[0])! ? a : b[0]);
-        },
-
-        irv: (voterX: number, voterY: number) => {
-            const pref = getVoterPreference(voterX, voterY);
-            return pref[0].id;
         }
-    };
+
+        return newVoters;
+    }, []);
+
+    const runPluralityElection = useCallback((): ElectionResult => {
+        const votes: Record<string, number> = {};
+        candidates.forEach(c => votes[c.id] = 0);
+
+        voters.forEach(voter => {
+            const pref = getVoterPreference(voter.x, voter.y);
+            votes[pref[0].id]++;
+        });
+
+        const winnerId = Object.entries(votes)
+            .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+
+        return {
+            winnerId,
+            votes,
+            roundDetails: [`Total votes: ${voters.length}`]
+        };
+    }, [voters, candidates]);
+
+    const runApprovalElection = useCallback((): ElectionResult => {
+        const votes: Record<string, number> = {};
+        candidates.forEach(c => votes[c.id] = 0);
+
+        voters.forEach(voter => {
+            const prefs = getVoterPreference(voter.x, voter.y);
+            prefs.forEach(p => {
+                if (p.dist <= approvalThreshold) {
+                    votes[p.id]++;
+                }
+            });
+        });
+
+        const winnerId = Object.entries(votes)
+            .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+
+        return {
+            winnerId,
+            votes,
+            roundDetails: [`Average approvals per voter: ${(Object.values(votes).reduce((a, b) => a + b, 0) / voters.length).toFixed(2)}`]
+        };
+    }, [voters, candidates, approvalThreshold]);
+
+    const runBordaElection = useCallback((): ElectionResult => {
+        const votes: Record<string, number> = {};
+        candidates.forEach(c => votes[c.id] = 0);
+
+        voters.forEach(voter => {
+            const prefs = getVoterPreference(voter.x, voter.y);
+            prefs.forEach((p, i) => {
+                votes[p.id] += candidates.length - 1 - i;
+            });
+        });
+
+        const winnerId = Object.entries(votes)
+            .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+
+        return {
+            winnerId,
+            votes,
+            roundDetails: [`Total Borda points: ${Object.values(votes).reduce((a, b) => a + b, 0)}`]
+        };
+    }, [voters, candidates]);
+
+    const runIRVElection = useCallback((): ElectionResult => {
+        let remainingCandidates = [...candidates];
+        const roundDetails: string[] = [];
+        const eliminated: string[] = [];
+
+        while (remainingCandidates.length > 1) {
+            const roundVotes: Record<string, number> = {};
+            remainingCandidates.forEach(c => roundVotes[c.id] = 0);
+
+            voters.forEach(voter => {
+                const prefs = getVoterPreference(voter.x, voter.y)
+                    .filter(p => remainingCandidates.some(c => c.id === p.id));
+                roundVotes[prefs[0].id]++;
+            });
+
+            const majorityNeeded = voters.length / 2;
+            const leader = Object.entries(roundVotes)
+                .reduce((a, b) => a[1] > b[1] ? a : b);
+
+            if (leader[1] > majorityNeeded) {
+                return {
+                    winnerId: leader[0],
+                    votes: roundVotes,
+                    roundDetails: [...roundDetails, `Final round: ${leader[0]} wins with ${leader[1]} votes`],
+                    eliminated
+                };
+            }
+
+            const loser = Object.entries(roundVotes)
+                .reduce((a, b) => a[1] < b[1] ? a : b);
+            remainingCandidates = remainingCandidates.filter(c => c.id !== loser[0]);
+            eliminated.push(loser[0]);
+
+            roundDetails.push(
+                `Round ${roundDetails.length + 1}: ${candidates.find(c => c.id === loser[0])?.name} eliminated with ${loser[1]} votes`
+            );
+        }
+
+        return {
+            winnerId: remainingCandidates[0].id,
+            votes: { [remainingCandidates[0].id]: voters.length },
+            roundDetails,
+            eliminated
+        };
+    }, [voters, candidates]);
+
+    const runElection = useCallback(() => {
+        let result: ElectionResult;
+        switch (selectedMethod) {
+            case 'approval':
+                result = runApprovalElection();
+                break;
+            case 'borda':
+                result = runBordaElection();
+                break;
+            case 'irv':
+                result = runIRVElection();
+                break;
+            default:
+                result = runPluralityElection();
+        }
+        setElectionResults(result);
+    }, [selectedMethod, runPluralityElection, runApprovalElection, runBordaElection, runIRVElection]);
 
     const addCandidate = () => {
         if (candidates.length >= availableColors.length) return;
 
         const newId = (Math.max(0, ...candidates.map(c => parseInt(c.id))) + 1).toString();
         const newColor = availableColors[candidates.length];
-        const letter = String.fromCharCode(65 + candidates.length); // A, B, C, etc.
+        const letter = String.fromCharCode(65 + candidates.length);
 
         setCandidates([...candidates, {
             id: newId,
@@ -287,7 +252,7 @@ export const VotingMethodViz = () => {
     };
 
     const removeCandidate = (id: string) => {
-        if (candidates.length <= 2) return; // Maintain at least 2 candidates
+        if (candidates.length <= 2) return;
         setCandidates(candidates.filter(c => c.id !== id));
     };
 
@@ -297,7 +262,30 @@ export const VotingMethodViz = () => {
         ));
     };
 
-    const drawVisualization = () => {
+    const updateCandidatePosition = (id: string, newX: number, newY: number) => {
+        const x = Math.max(0, Math.min(1, newX));
+        const y = Math.max(0, Math.min(1, newY));
+
+        setCandidates(candidates.map(c =>
+            c.id === id ? { ...c, x, y } : c
+        ));
+    };
+
+    const handleCoordinateInput = (id: string, coord: 'x' | 'y', value: string) => {
+        const numValue = parseFloat(value);
+        if (isNaN(numValue)) return;
+
+        const candidate = candidates.find(c => c.id === id);
+        if (!candidate) return;
+
+        updateCandidatePosition(
+            id,
+            coord === 'x' ? numValue : candidate.x,
+            coord === 'y' ? numValue : candidate.y
+        );
+    };
+
+    const drawVisualization = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -314,7 +302,7 @@ export const VotingMethodViz = () => {
                 const voterX = x / width;
                 const voterY = 1 - (y / height);
 
-                const winnerId = votingMethods[selectedMethod as keyof typeof votingMethods](voterX, voterY);
+                const winnerId = getVoterPreference(voterX, voterY)[0].id;
                 const winnerColor = candidates.find(c => c.id === winnerId)?.color ?? '#000000';
                 const rgb = parseInt(winnerColor.slice(1), 16);
 
@@ -326,6 +314,20 @@ export const VotingMethodViz = () => {
             }
         }
         ctx.putImageData(imageData, 0, 0);
+
+        // Draw voters
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        voters.forEach(voter => {
+            ctx.beginPath();
+            ctx.arc(
+                voter.x * width,
+                (1 - voter.y) * height,
+                2,
+                0,
+                2 * Math.PI
+            );
+            ctx.fill();
+        });
 
         // Draw candidates
         candidates.forEach((candidate) => {
@@ -343,14 +345,12 @@ export const VotingMethodViz = () => {
             ctx.lineWidth = 3;
             ctx.stroke();
 
-            // Draw candidate label
             ctx.fillStyle = 'black';
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText(candidate.name, candidate.x * width, (1 - candidate.y) * height + 20);
         });
 
-        // Draw approval radius if approval voting is selected
         if (selectedMethod === 'approval') {
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
             ctx.lineWidth = 1;
@@ -366,11 +366,7 @@ export const VotingMethodViz = () => {
                 ctx.stroke();
             });
         }
-    };
-
-    useEffect(() => {
-        drawVisualization();
-    }, [candidates, selectedMethod, approvalThreshold]);
+    }, [candidates, selectedMethod, approvalThreshold, voters]);
 
     const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
         const canvas = canvasRef.current;
@@ -422,29 +418,64 @@ export const VotingMethodViz = () => {
         setIsDragging(null);
     };
 
-    const updateCandidatePosition = (id: string, newX: number, newY: number) => {
-        // Clamp values between 0 and 1
-        const x = Math.max(0, Math.min(1, newX));
-        const y = Math.max(0, Math.min(1, newY));
+    const votingMethods = {
+        plurality: (voterX: number, voterY: number) => {
+            return getVoterPreference(voterX, voterY)[0].id;
+        },
 
-        setCandidates(candidates.map(c =>
-            c.id === id ? { ...c, x, y } : c
-        ));
+        approval: (voterX: number, voterY: number) => {
+            const prefs = getVoterPreference(voterX, voterY);
+            const approvedCandidates = prefs.filter(p => p.dist <= approvalThreshold);
+            return approvedCandidates.length > 0 ? approvedCandidates[0].id : prefs[0].id;
+        },
+
+        borda: (voterX: number, voterY: number) => {
+            const prefs = getVoterPreference(voterX, voterY);
+            const points = new Map<string, number>();
+
+            prefs.forEach((p, i) => {
+                points.set(p.id, (candidates.length - 1 - i));
+            });
+
+            return [...points.entries()].reduce((a, b) =>
+                a[1] > b[1] ? a : b
+            )[0];
+        },
+
+        irv: (voterX: number, voterY: number) => {
+            const prefs = getVoterPreference(voterX, voterY);
+            const remainingCandidates = new Set(candidates.map(c => c.id));
+
+            while (remainingCandidates.size > 1) {
+                const votes = new Map<string, number>();
+                const samplePoints = 10;
+
+                // Count votes for remaining candidates
+                for (let x = 0; x < samplePoints; x++) {
+                    for (let y = 0; y < samplePoints; y++) {
+                        const sX = x / (samplePoints - 1);
+                        const sY = y / (samplePoints - 1);
+                        const voterPrefs = getVoterPreference(sX, sY)
+                            .filter(p => remainingCandidates.has(p.id));
+
+                        const topChoice = voterPrefs[0].id;
+                        votes.set(topChoice, (votes.get(topChoice) || 0) + 1);
+                    }
+                }
+
+                // Find candidate with lowest votes
+                const loser = [...votes.entries()].reduce((a, b) =>
+                    a[1] < b[1] ? a : b
+                )[0];
+
+                remainingCandidates.delete(loser);
+            }
+
+            // Return the last remaining candidate
+            return remainingCandidates.values().next().value;
+        }
     };
 
-    const handleCoordinateInput = (id: string, coord: 'x' | 'y', value: string) => {
-        const numValue = parseFloat(value);
-        if (isNaN(numValue)) return;
-
-        const candidate = candidates.find(c => c.id === id);
-        if (!candidate) return;
-
-        updateCandidatePosition(
-            id,
-            coord === 'x' ? numValue : candidate.x,
-            coord === 'y' ? numValue : candidate.y
-        );
-    };
 
     const calculateWinner = (method: keyof typeof votingMethods) => {
         const samplePoints = 50; // Number of points to sample in each dimension
@@ -475,6 +506,11 @@ export const VotingMethodViz = () => {
             votes: Object.fromEntries(votes)
         };
     };
+
+    useEffect(() => {
+        drawVisualization();
+    }, [drawVisualization]);
+
 
     return (
         <div className="w-full max-w-6xl p-4 bg-white rounded-lg shadow-lg">
@@ -590,6 +626,39 @@ export const VotingMethodViz = () => {
                                     <li>Dragging the circles on the visualization</li>
                                     <li>Entering coordinates (0-1 range for both X and Y)</li>
                                 </ul>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 className="font-semibold mb-2">Voter Settings</h3>
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                    <label>Number of Voters:</label>
+                                    <input
+                                        type="number"
+                                        value={voterCount}
+                                        onChange={(e) => setVoterCount(Math.max(1, parseInt(e.target.value) || 0))}
+                                        className="px-2 py-1 border rounded w-24"
+                                    />
+                                    <button
+                                        onClick={() => setVoters(generateVoters(voterCount, voterDistribution))}
+                                        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                                    >
+                                        Generate Voters
+                                    </button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <label>Distribution:</label>
+                                    <select
+                                        value={voterDistribution}
+                                        onChange={(e) => setVoterDistribution(e.target.value as typeof voterDistribution)}
+                                        className="px-2 py-1 border rounded"
+                                    >
+                                        <option value="uniform">Uniform</option>
+                                        <option value="normal">Normal</option>
+                                        <option value="clustered">Clustered</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 
