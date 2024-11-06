@@ -10,6 +10,197 @@ interface Candidate {
     name: string;
 }
 
+interface Voter {
+    id: string;
+    x: number;
+    y: number;
+}
+
+interface ElectionResult {
+    winnerId: string;
+    roundDetails: string[];
+    votes: Record<string, number>;
+    eliminated?: string[];
+}
+
+const [voters, setVoters] = useState<Voter[]>([]);
+const [voterCount, setVoterCount] = useState(100);
+const [voterDistribution, setVoterDistribution] = useState<'uniform' | 'normal' | 'clustered'>('uniform');
+
+
+const generateVoters = (count: number, distribution: 'uniform' | 'normal' | 'clustered') => {
+    const newVoters: Voter[] = [];
+    
+    for (let i = 0; i < count; i++) {
+        let x: number, y: number;
+        
+        switch (distribution) {
+            case 'normal':
+                // Generate normally distributed voters around the center
+                x = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
+                y = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
+                break;
+                
+            case 'clustered':
+                // Create 2-3 clusters
+                const clusters = [[0.3, 0.3], [0.7, 0.7], [0.5, 0.5]];
+                const cluster = clusters[Math.floor(Math.random() * clusters.length)];
+                x = Math.min(1, Math.max(0, cluster[0] + (randn_bm() * 0.2)));
+                y = Math.min(1, Math.max(0, cluster[1] + (randn_bm() * 0.2)));
+                break;
+                
+            default: // uniform
+                x = Math.random();
+                y = Math.random();
+        }
+        
+        newVoters.push({
+            id: `voter-${i}`,
+            x,
+            y
+        });
+    }
+    
+    return newVoters;
+};
+
+// Helper function for normal distribution
+const randn_bm = () => {
+    let u = 0, v = 0;
+    while(u === 0) u = Math.random();
+    while(v === 0) v = Math.random();
+    return Math.sqrt( -2.0 * Math.log( u ) ) * Math.cos( 2.0 * Math.PI * v );
+};
+
+// Modify the voting methods to use actual voters
+const runElection = (method: keyof typeof votingMethods): ElectionResult => {
+    switch (method) {
+        case 'plurality':
+            return runPluralityElection();
+        case 'approval':
+            return runApprovalElection();
+        case 'borda':
+            return runBordaElection();
+        case 'irv':
+            return runIRVElection();
+        default:
+            throw new Error(`Unknown method: ${method}`);
+    }
+};
+
+const runPluralityElection = (): ElectionResult => {
+    const votes: Record<string, number> = {};
+    candidates.forEach(c => votes[c.id] = 0);
+    
+    voters.forEach(voter => {
+        const pref = getVoterPreference(voter.x, voter.y);
+        votes[pref[0].id]++;
+    });
+    
+    const winnerId = Object.entries(votes)
+        .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+    
+    return {
+        winnerId,
+        votes,
+        roundDetails: [`Total votes: ${voters.length}`]
+    };
+};
+
+const runApprovalElection = (): ElectionResult => {
+    const votes: Record<string, number> = {};
+    candidates.forEach(c => votes[c.id] = 0);
+    
+    voters.forEach(voter => {
+        const prefs = getVoterPreference(voter.x, voter.y);
+        prefs.forEach(p => {
+            if (p.dist <= approvalThreshold) {
+                votes[p.id]++;
+            }
+        });
+    });
+    
+    const winnerId = Object.entries(votes)
+        .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+    
+    return {
+        winnerId,
+        votes,
+        roundDetails: [`Average approvals per voter: ${(Object.values(votes).reduce((a, b) => a + b, 0) / voters.length).toFixed(2)}`]
+    };
+};
+
+const runBordaElection = (): ElectionResult => {
+    const votes: Record<string, number> = {};
+    candidates.forEach(c => votes[c.id] = 0);
+    
+    voters.forEach(voter => {
+        const prefs = getVoterPreference(voter.x, voter.y);
+        prefs.forEach((p, i) => {
+            votes[p.id] += candidates.length - 1 - i;
+        });
+    });
+    
+    const winnerId = Object.entries(votes)
+        .reduce((a, b) => a[1] > b[1] ? a : b)[0];
+    
+    return {
+        winnerId,
+        votes,
+        roundDetails: [`Total Borda points: ${Object.values(votes).reduce((a, b) => a + b, 0)}`]
+    };
+};
+
+const runIRVElection = (): ElectionResult => {
+    let remainingCandidates = [...candidates];
+    const roundDetails: string[] = [];
+    const eliminated: string[] = [];
+    
+    while (remainingCandidates.length > 1) {
+        const roundVotes: Record<string, number> = {};
+        remainingCandidates.forEach(c => roundVotes[c.id] = 0);
+        
+        // Count first preferences among remaining candidates
+        voters.forEach(voter => {
+            const prefs = getVoterPreference(voter.x, voter.y)
+                .filter(p => remainingCandidates.some(c => c.id === p.id));
+            roundVotes[prefs[0].id]++;
+        });
+        
+        // Check for majority
+        const majorityNeeded = voters.length / 2;
+        const leader = Object.entries(roundVotes)
+            .reduce((a, b) => a[1] > b[1] ? a : b);
+        
+        if (leader[1] > majorityNeeded) {
+            return {
+                winnerId: leader[0],
+                votes: roundVotes,
+                roundDetails: [...roundDetails, `Final round: ${leader[0]} wins with ${leader[1]} votes`],
+                eliminated
+            };
+        }
+        
+        // Eliminate last place
+        const loser = Object.entries(roundVotes)
+            .reduce((a, b) => a[1] < b[1] ? a : b);
+        remainingCandidates = remainingCandidates.filter(c => c.id !== loser[0]);
+        eliminated.push(loser[0]);
+        
+        roundDetails.push(
+            `Round ${roundDetails.length + 1}: ${loser[0]} eliminated with ${loser[1]} votes`
+        );
+    }
+    
+    return {
+        winnerId: remainingCandidates[0].id,
+        votes: { [remainingCandidates[0].id]: voters.length },
+        roundDetails,
+        eliminated
+    };
+};
+
+
 export const VotingMethodViz = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [candidates, setCandidates] = useState<Candidate[]>([
