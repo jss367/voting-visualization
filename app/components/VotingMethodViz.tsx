@@ -1,25 +1,15 @@
 "use client"
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-interface Candidate {
-    id: string;
-    x: number;
-    y: number;
-    color: string;
-    name: string;
-}
 
-interface Voter {
-    id: string;
-    x: number;
-    y: number;
-}
 
-interface ElectionResult {
-    winnerId: string;
-    roundDetails: string[];
-    votes: Record<string, number>;
-    eliminated?: string[];
-}
+import type { Voter } from './types';
+import {
+    distance, getVoterPreference,
+    methodDescriptions,
+    methods,
+    votingMethods
+} from './votingMethods';
+
 const VotingMethodViz = () => {
     const canvasRef = useRef(null);
     const [candidates, setCandidates] = useState([
@@ -34,7 +24,6 @@ const VotingMethodViz = () => {
     const [voters, setVoters] = useState([]);
     const [voterCount, setVoterCount] = useState(10000);
     const [voterDistribution, setVoterDistribution] = useState('uniform');
-    const [electionResults, setElectionResults] = useState(null);
     const [hasGeneratedVoters, setHasGeneratedVoters] = useState(false);
 
     const availableColors = [
@@ -42,19 +31,9 @@ const VotingMethodViz = () => {
         '#ec4899', '#10b981', '#6366f1', '#f97316', '#06b6d4'
     ];
 
-    const methods = {
-        plurality: 'Plurality',
-        approval: 'Approval',
-        borda: 'Borda Count',
-        irv: 'Instant Runoff'
-    };
 
-    const methodDescriptions = {
-        plurality: "Each voter chooses their closest candidate. The candidate with the most votes wins.",
-        approval: "Voters 'approve' all candidates within a certain distance. The most approved candidate wins.",
-        borda: "Voters rank candidates by distance. Each rank gives points (n-1 for 1st, n-2 for 2nd, etc.). Highest points wins.",
-        irv: "Voters rank by distance. If no majority, eliminate last place and retry with remaining candidates."
-    };
+
+
 
     const randn_bm = () => {
         let u = 0, v = 0;
@@ -63,16 +42,7 @@ const VotingMethodViz = () => {
         return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
     };
 
-    const distance = (x1: number, y1: number, x2: number, y2: number): number =>
-        Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 
-    const getVoterPreference = (voterX: number, voterY: number) => {
-        const distances = candidates.map((candidate) => ({
-            id: candidate.id,
-            dist: distance(voterX, voterY, candidate.x, candidate.y)
-        }));
-        return distances.sort((a, b) => a.dist - b.dist);
-    };
 
     const generateVoters = useCallback((count: number, distribution: 'uniform' | 'normal' | 'clustered') => {
         const newVoters: Voter[] = [];
@@ -108,132 +78,6 @@ const VotingMethodViz = () => {
         return newVoters;
     }, []);
 
-    const runPluralityElection = useCallback((): ElectionResult => {
-        const votes: Record<string, number> = {};
-        candidates.forEach(c => votes[c.id] = 0);
-
-        voters.forEach(voter => {
-            const pref = getVoterPreference(voter.x, voter.y);
-            votes[pref[0].id]++;
-        });
-
-        const winnerId = Object.entries(votes)
-            .reduce((a, b) => a[1] > b[1] ? a : b)[0];
-
-        return {
-            winnerId,
-            votes,
-            roundDetails: [`Total votes: ${voters.length}`]
-        };
-    }, [voters, candidates]);
-
-    const runApprovalElection = useCallback((): ElectionResult => {
-        const votes: Record<string, number> = {};
-        candidates.forEach(c => votes[c.id] = 0);
-
-        voters.forEach(voter => {
-            const prefs = getVoterPreference(voter.x, voter.y);
-            prefs.forEach(p => {
-                if (p.dist <= approvalThreshold) {
-                    votes[p.id]++;
-                }
-            });
-        });
-
-        const winnerId = Object.entries(votes)
-            .reduce((a, b) => a[1] > b[1] ? a : b)[0];
-
-        return {
-            winnerId,
-            votes,
-            roundDetails: [`Average approvals per voter: ${(Object.values(votes).reduce((a, b) => a + b, 0) / voters.length).toFixed(2)}`]
-        };
-    }, [voters, candidates, approvalThreshold]);
-
-    const runBordaElection = useCallback((): ElectionResult => {
-        const votes: Record<string, number> = {};
-        candidates.forEach(c => votes[c.id] = 0);
-
-        voters.forEach(voter => {
-            const prefs = getVoterPreference(voter.x, voter.y);
-            prefs.forEach((p, i) => {
-                votes[p.id] += candidates.length - 1 - i;
-            });
-        });
-
-        const winnerId = Object.entries(votes)
-            .reduce((a, b) => a[1] > b[1] ? a : b)[0];
-
-        return {
-            winnerId,
-            votes,
-            roundDetails: [`Total Borda points: ${Object.values(votes).reduce((a, b) => a + b, 0)}`]
-        };
-    }, [voters, candidates]);
-
-    const runIRVElection = useCallback((): ElectionResult => {
-        let remainingCandidates = [...candidates];
-        const roundDetails: string[] = [];
-        const eliminated: string[] = [];
-
-        while (remainingCandidates.length > 1) {
-            const roundVotes: Record<string, number> = {};
-            remainingCandidates.forEach(c => roundVotes[c.id] = 0);
-
-            voters.forEach(voter => {
-                const prefs = getVoterPreference(voter.x, voter.y)
-                    .filter(p => remainingCandidates.some(c => c.id === p.id));
-                roundVotes[prefs[0].id]++;
-            });
-
-            const majorityNeeded = voters.length / 2;
-            const leader = Object.entries(roundVotes)
-                .reduce((a, b) => a[1] > b[1] ? a : b);
-
-            if (leader[1] > majorityNeeded) {
-                return {
-                    winnerId: leader[0],
-                    votes: roundVotes,
-                    roundDetails: [...roundDetails, `Final round: ${leader[0]} wins with ${leader[1]} votes`],
-                    eliminated
-                };
-            }
-
-            const loser = Object.entries(roundVotes)
-                .reduce((a, b) => a[1] < b[1] ? a : b);
-            remainingCandidates = remainingCandidates.filter(c => c.id !== loser[0]);
-            eliminated.push(loser[0]);
-
-            roundDetails.push(
-                `Round ${roundDetails.length + 1}: ${candidates.find(c => c.id === loser[0])?.name} eliminated with ${loser[1]} votes`
-            );
-        }
-
-        return {
-            winnerId: remainingCandidates[0].id,
-            votes: { [remainingCandidates[0].id]: voters.length },
-            roundDetails,
-            eliminated
-        };
-    }, [voters, candidates]);
-
-    const runElection = useCallback(() => {
-        let result: ElectionResult;
-        switch (selectedMethod) {
-            case 'approval':
-                result = runApprovalElection();
-                break;
-            case 'borda':
-                result = runBordaElection();
-                break;
-            case 'irv':
-                result = runIRVElection();
-                break;
-            default:
-                result = runPluralityElection();
-        }
-        setElectionResults(result);
-    }, [selectedMethod, runPluralityElection, runApprovalElection, runBordaElection, runIRVElection]);
 
     const addCandidate = () => {
         if (candidates.length >= availableColors.length) return;
@@ -305,12 +149,12 @@ const VotingMethodViz = () => {
                 let winnerId;
                 if (selectedMethod === 'approval') {
                     // For approval, color based on approved candidates
-                    const prefs = getVoterPreference(voterX, voterY);
+                    const prefs = getVoterPreference(voterX, voterY, candidates);
                     const approvedCandidates = prefs.filter(p => p.dist <= approvalThreshold);
                     winnerId = approvedCandidates.length > 0 ? approvedCandidates[0].id : prefs[0].id;
                 } else if (selectedMethod === 'borda') {
                     // For Borda, color based on points
-                    const prefs = getVoterPreference(voterX, voterY);
+                    const prefs = getVoterPreference(voterX, voterY, candidates);
                     const points = new Map();
                     prefs.forEach((p, i) => {
                         points.set(p.id, candidates.length - 1 - i);
@@ -319,7 +163,7 @@ const VotingMethodViz = () => {
                         a[1] > b[1] ? a : b)[0];
                 } else {
                     // For plurality and IRV, color based on closest candidate
-                    winnerId = getVoterPreference(voterX, voterY)[0].id;
+                    winnerId = getVoterPreference(voterX, voterY, candidates)[0].id;
                 }
 
                 const winnerColor = candidates.find(c => c.id === winnerId)?.color ?? '#000000';
@@ -438,36 +282,6 @@ const VotingMethodViz = () => {
     };
 
 
-    const votingMethods = {
-        plurality: (voterX: number, voterY: number) => {
-            return [getVoterPreference(voterX, voterY)[0].id];
-        },
-
-        approval: (voterX: number, voterY: number) => {
-            const prefs = getVoterPreference(voterX, voterY);
-            const approvedCandidates = prefs.filter(p => p.dist <= approvalThreshold);
-            return approvedCandidates.length > 0 ? approvedCandidates.map(c => c.id) : [prefs[0].id];
-        },
-
-        borda: (voterX: number, voterY: number) => {
-            const prefs = getVoterPreference(voterX, voterY);
-            const points = new Map<string, number>();
-
-            prefs.forEach((p, i) => {
-                points.set(p.id, (candidates.length - 1 - i));
-            });
-
-            return [...points.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .map(([id]) => id);
-        },
-
-        irv: (voterX: number, voterY: number) => {
-            return getVoterPreference(voterX, voterY).map(p => p.id);
-        }
-    };
-
-
     const calculateWinningAreas = useCallback((method: keyof typeof votingMethods) => {
         const samplePoints = 50;
         const votes = new Map<string, number>();
@@ -480,7 +294,7 @@ const VotingMethodViz = () => {
             for (let y = 0; y < samplePoints; y++) {
                 const voterX = x / (samplePoints - 1);
                 const voterY = y / (samplePoints - 1);
-                const voteResult = votingMethods[method](voterX, voterY);
+                const voteResult = votingMethods[method](voterX, voterY, candidates, method === 'approval' ? approvalThreshold : undefined);
 
                 if (method === 'approval') {
                     // For approval, count all approved candidates
@@ -572,7 +386,7 @@ const VotingMethodViz = () => {
         if (method === 'irv') {
             let remainingCandidates = [...candidates];
             const allVotes = voters.map(voter =>
-                votingMethods[method](voter.x, voter.y)
+                votingMethods[method](voter.x, voter.y, candidates)
             );
 
             while (remainingCandidates.length > 1) {
@@ -609,7 +423,7 @@ const VotingMethodViz = () => {
             }
         } else {
             voters.forEach(voter => {
-                const voteResult = votingMethods[method](voter.x, voter.y);
+                const voteResult = votingMethods[method](voter.x, voter.y, candidates, method === 'approval' ? approvalThreshold : undefined);
                 if (method === 'approval') {
                     voteResult.forEach(id => votes.set(id, votes.get(id)! + 1));
                 } else if (method === 'borda') {
