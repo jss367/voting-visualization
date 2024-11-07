@@ -142,3 +142,35 @@ describe('Edge cases for all methods', () => {
         });
     });
 });
+
+
+describe('Smith Set + Approval voting', () => {
+  const candidates: Candidate[] = [
+      { id: 'A', x: 0, y: 0, color: 'red', name: 'A' },
+      { id: 'B', x: 1, y: 0, color: 'blue', name: 'B' },
+      { id: 'C', x: 0.5, y: 0, color: 'green', name: 'C' }
+  ];
+
+  test('selects from Smith set', () => {
+      // At (0.5, 0), candidate C should be in Smith set and win
+      const vote = votingMethods.smithApproval(0.5, 0, candidates, 0.3);
+      expect(vote).toContain('C');
+  });
+
+  test('handles approval threshold correctly', () => {
+      // Test with different thresholds
+      const smallThreshold = 0.2;
+      const largeThreshold = 0.6;
+      
+      const voteSmall = votingMethods.smithApproval(0.5, 0, candidates, smallThreshold);
+      const voteLarge = votingMethods.smithApproval(0.5, 0, candidates, largeThreshold);
+      
+      expect(voteSmall.length).toBeLessThanOrEqual(voteLarge.length);
+  });
+
+  test('handles single candidate in Smith set', () => {
+      // At (0, 0), only A should be in Smith set
+      const vote = votingMethods.smithApproval(0, 0, candidates, 0.3);
+      expect(vote).toEqual(['A']);
+  });
+});
