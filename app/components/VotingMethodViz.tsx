@@ -32,7 +32,7 @@ const VotingMethodViz = () => {
     const [approvalThreshold, setApprovalThreshold] = useState(0.3);
     const [showSettings, setShowSettings] = useState(false);
     const [voters, setVoters] = useState([]);
-    const [voterCount, setVoterCount] = useState(100);
+    const [voterCount, setVoterCount] = useState(10000);
     const [voterDistribution, setVoterDistribution] = useState('uniform');
     const [electionResults, setElectionResults] = useState(null);
     const [hasGeneratedVoters, setHasGeneratedVoters] = useState(false);
