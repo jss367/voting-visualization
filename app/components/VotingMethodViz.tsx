@@ -52,8 +52,14 @@ const VotingMethodViz = () => {
 
             switch (distribution) {
                 case 'normal':
-                    x = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
-                    y = Math.min(1, Math.max(0, 0.5 + (randn_bm() * 0.3)));
+                    const standardDev = 0.15;
+
+                    // Generate values until we get one in bounds
+                    // This avoids edge accumulation
+                    do {
+                        x = 0.5 + (randn_bm() * standardDev);
+                        y = 0.5 + (randn_bm() * standardDev);
+                    } while (x < 0 || x > 1 || y < 0 || y > 1);
                     break;
 
                 case 'clustered':
