@@ -20,22 +20,22 @@ interface ElectionResult {
     votes: Record<string, number>;
     eliminated?: string[];
 }
-
-export const VotingMethodViz = () => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [candidates, setCandidates] = useState<Candidate[]>([
+const VotingMethodViz = () => {
+    const canvasRef = useRef(null);
+    const [candidates, setCandidates] = useState([
         { id: '1', x: 0.3, y: 0.7, color: '#22c55e', name: 'Candidate A' },
         { id: '2', x: 0.5, y: 0.5, color: '#ef4444', name: 'Candidate B' },
         { id: '3', x: 0.7, y: 0.3, color: '#3b82f6', name: 'Candidate C' },
     ]);
     const [selectedMethod, setSelectedMethod] = useState('plurality');
-    const [isDragging, setIsDragging] = useState<string | null>(null);
+    const [isDragging, setIsDragging] = useState(null);
     const [approvalThreshold, setApprovalThreshold] = useState(0.3);
     const [showSettings, setShowSettings] = useState(false);
-    const [voters, setVoters] = useState<Voter[]>([]);
+    const [voters, setVoters] = useState([]);
     const [voterCount, setVoterCount] = useState(100);
-    const [voterDistribution, setVoterDistribution] = useState<'uniform' | 'normal' | 'clustered'>('uniform');
-    const [electionResults, setElectionResults] = useState<ElectionResult | null>(null);
+    const [voterDistribution, setVoterDistribution] = useState('uniform');
+    const [electionResults, setElectionResults] = useState(null);
+    const [hasGeneratedVoters, setHasGeneratedVoters] = useState(false);
 
     const availableColors = [
         '#22c55e', '#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6',
@@ -302,7 +302,26 @@ export const VotingMethodViz = () => {
                 const voterX = x / width;
                 const voterY = 1 - (y / height);
 
-                const winnerId = getVoterPreference(voterX, voterY)[0].id;
+                let winnerId;
+                if (selectedMethod === 'approval') {
+                    // For approval, color based on approved candidates
+                    const prefs = getVoterPreference(voterX, voterY);
+                    const approvedCandidates = prefs.filter(p => p.dist <= approvalThreshold);
+                    winnerId = approvedCandidates.length > 0 ? approvedCandidates[0].id : prefs[0].id;
+                } else if (selectedMethod === 'borda') {
+                    // For Borda, color based on points
+                    const prefs = getVoterPreference(voterX, voterY);
+                    const points = new Map();
+                    prefs.forEach((p, i) => {
+                        points.set(p.id, candidates.length - 1 - i);
+                    });
+                    winnerId = [...points.entries()].reduce((a, b) =>
+                        a[1] > b[1] ? a : b)[0];
+                } else {
+                    // For plurality and IRV, color based on closest candidate
+                    winnerId = getVoterPreference(voterX, voterY)[0].id;
+                }
+
                 const winnerColor = candidates.find(c => c.id === winnerId)?.color ?? '#000000';
                 const rgb = parseInt(winnerColor.slice(1), 16);
 
@@ -418,15 +437,16 @@ export const VotingMethodViz = () => {
         setIsDragging(null);
     };
 
+
     const votingMethods = {
         plurality: (voterX: number, voterY: number) => {
-            return getVoterPreference(voterX, voterY)[0].id;
+            return [getVoterPreference(voterX, voterY)[0].id];
         },
 
         approval: (voterX: number, voterY: number) => {
             const prefs = getVoterPreference(voterX, voterY);
             const approvedCandidates = prefs.filter(p => p.dist <= approvalThreshold);
-            return approvedCandidates.length > 0 ? approvedCandidates[0].id : prefs[0].id;
+            return approvedCandidates.length > 0 ? approvedCandidates.map(c => c.id) : [prefs[0].id];
         },
 
         borda: (voterX: number, voterY: number) => {
@@ -437,79 +457,199 @@ export const VotingMethodViz = () => {
                 points.set(p.id, (candidates.length - 1 - i));
             });
 
-            return [...points.entries()].reduce((a, b) =>
-                a[1] > b[1] ? a : b
-            )[0];
+            return [...points.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([id]) => id);
         },
 
         irv: (voterX: number, voterY: number) => {
-            const prefs = getVoterPreference(voterX, voterY);
-            const remainingCandidates = new Set(candidates.map(c => c.id));
-
-            while (remainingCandidates.size > 1) {
-                const votes = new Map<string, number>();
-                const samplePoints = 10;
-
-                // Count votes for remaining candidates
-                for (let x = 0; x < samplePoints; x++) {
-                    for (let y = 0; y < samplePoints; y++) {
-                        const sX = x / (samplePoints - 1);
-                        const sY = y / (samplePoints - 1);
-                        const voterPrefs = getVoterPreference(sX, sY)
-                            .filter(p => remainingCandidates.has(p.id));
-
-                        const topChoice = voterPrefs[0].id;
-                        votes.set(topChoice, (votes.get(topChoice) || 0) + 1);
-                    }
-                }
-
-                // Find candidate with lowest votes
-                const loser = [...votes.entries()].reduce((a, b) =>
-                    a[1] < b[1] ? a : b
-                )[0];
-
-                remainingCandidates.delete(loser);
-            }
-
-            // Return the last remaining candidate
-            return remainingCandidates.values().next().value;
+            return getVoterPreference(voterX, voterY).map(p => p.id);
         }
     };
 
 
-    const calculateWinner = (method: keyof typeof votingMethods) => {
-        const samplePoints = 50; // Number of points to sample in each dimension
+    const calculateWinningAreas = useCallback((method: keyof typeof votingMethods) => {
+        const samplePoints = 50;
         const votes = new Map<string, number>();
         candidates.forEach(c => votes.set(c.id, 0));
 
-        // Sample points across the map
+        // For IRV, we need to collect all votes first
+        const allVotes: string[][] = [];
+
         for (let x = 0; x < samplePoints; x++) {
             for (let y = 0; y < samplePoints; y++) {
                 const voterX = x / (samplePoints - 1);
                 const voterY = y / (samplePoints - 1);
-                const winnerId = votingMethods[method](voterX, voterY);
-                votes.set(winnerId, votes.get(winnerId)! + 1);
+                const voteResult = votingMethods[method](voterX, voterY);
+
+                if (method === 'approval') {
+                    // For approval, count all approved candidates
+                    voteResult.forEach(id => votes.set(id, votes.get(id)! + 1));
+                } else if (method === 'borda') {
+                    // For Borda, give points based on ranking
+                    voteResult.forEach((id, index) => {
+                        votes.set(id, votes.get(id)! + (candidates.length - 1 - index));
+                    });
+                } else if (method === 'irv') {
+                    // For IRV, collect all votes for later processing
+                    allVotes.push(voteResult);
+                } else {
+                    // For plurality, just count first preference
+                    votes.set(voteResult[0], votes.get(voteResult[0])! + 1);
+                }
             }
         }
 
-        // Find the winner
-        const winner = [...votes.entries()].reduce((a, b) =>
-            a[1] > b[1] ? a : b
-        );
+        // Special handling for IRV
+        if (method === 'irv') {
+            let remainingCandidates = new Set(candidates.map(c => c.id));
 
-        const totalVotes = [...votes.values()].reduce((a, b) => a + b, 0);
-        const winnerPercentage = (winner[1] / totalVotes) * 100;
+            while (remainingCandidates.size > 1) {
+                const roundVotes = new Map<string, number>();
+                remainingCandidates.forEach(id => roundVotes.set(id, 0));
+
+                // Count first preferences among remaining candidates
+                allVotes.forEach(prefs => {
+                    const firstChoice = prefs.find(id => remainingCandidates.has(id));
+                    if (firstChoice) {
+                        roundVotes.set(firstChoice, roundVotes.get(firstChoice)! + 1);
+                    }
+                });
+
+                const totalVotes = [...roundVotes.values()].reduce((a, b) => a + b, 0);
+                const majorityThreshold = totalVotes / 2;
+
+                // Check if any candidate has a majority
+                const [winner] = [...roundVotes.entries()].reduce((a, b) =>
+                    b[1] > a[1] ? b : a
+                );
+                if (roundVotes.get(winner)! > majorityThreshold) {
+                    votes.clear();
+                    candidates.forEach(c => votes.set(c.id, 0));
+                    votes.set(winner, totalVotes);
+                    break;
+                }
+
+                // Eliminate candidate with fewest votes
+                const [loser] = [...roundVotes.entries()].reduce((a, b) =>
+                    a[1] < b[1] ? a : b
+                );
+                remainingCandidates.delete(loser);
+            }
+
+            // If we get here without finding a majority winner, the last remaining candidate wins
+            if (remainingCandidates.size === 1) {
+                const winner = remainingCandidates.values().next().value;
+                votes.clear();
+                candidates.forEach(c => votes.set(c.id, 0));
+                votes.set(winner, samplePoints * samplePoints);
+            }
+        }
+
+        const totalPoints = method === 'approval' ?
+            [...votes.values()].reduce((a, b) => a + b, 0) :
+            method === 'borda' ?
+                (samplePoints * samplePoints * (candidates.length * (candidates.length - 1) / 2)) :
+                samplePoints * samplePoints;
+
+        const results: Record<string, number> = {};
+        for (const [id, voteCount] of votes.entries()) {
+            results[id] = (voteCount / totalPoints) * 100;
+        }
 
         return {
-            winnerId: winner[0],
-            percentage: winnerPercentage,
-            votes: Object.fromEntries(votes)
+            votes: Object.fromEntries(votes),
+            percentages: results
         };
-    };
+    }, [candidates, votingMethods, approvalThreshold]);
+
+    const calculateActualVotes = useCallback((method: keyof typeof votingMethods) => {
+        if (!hasGeneratedVoters || voters.length === 0) return null;
+
+        const votes = new Map<string, number>();
+        candidates.forEach(c => votes.set(c.id, 0));
+
+        if (method === 'irv') {
+            let remainingCandidates = [...candidates];
+            const allVotes = voters.map(voter =>
+                votingMethods[method](voter.x, voter.y)
+            );
+
+            while (remainingCandidates.length > 1) {
+                const roundVotes = new Map<string, number>();
+                remainingCandidates.forEach(c => roundVotes.set(c.id, 0));
+
+                allVotes.forEach(prefs => {
+                    const firstChoice = prefs.find(id =>
+                        remainingCandidates.some(c => c.id === id)
+                    );
+                    if (firstChoice) {
+                        roundVotes.set(firstChoice, roundVotes.get(firstChoice)! + 1);
+                    }
+                });
+
+                const majorityNeeded = voters.length / 2;
+                const leader = [...roundVotes.entries()].reduce((a, b) =>
+                    a[1] > b[1] ? a : b
+                );
+
+                if (leader[1] > majorityNeeded) {
+                    votes.set(leader[0], leader[1]);
+                    break;
+                }
+
+                const loser = [...roundVotes.entries()].reduce((a, b) =>
+                    a[1] < b[1] ? a : b
+                )[0];
+                remainingCandidates = remainingCandidates.filter(c => c.id !== loser);
+            }
+
+            if (remainingCandidates.length === 1) {
+                votes.set(remainingCandidates[0].id, voters.length);
+            }
+        } else {
+            voters.forEach(voter => {
+                const voteResult = votingMethods[method](voter.x, voter.y);
+                if (method === 'approval') {
+                    voteResult.forEach(id => votes.set(id, votes.get(id)! + 1));
+                } else if (method === 'borda') {
+                    voteResult.forEach((id, index) => {
+                        votes.set(id, votes.get(id)! + (candidates.length - 1 - index));
+                    });
+                } else {
+                    votes.set(voteResult[0], votes.get(voteResult[0])! + 1);
+                }
+            });
+        }
+
+        const totalVotes = method === 'approval' ?
+            [...votes.values()].reduce((a, b) => a + b, 0) :
+            method === 'borda' ?
+                (voters.length * (candidates.length * (candidates.length - 1) / 2)) :
+                voters.length;
+
+        const results: Record<string, number> = {};
+        for (const [id, voteCount] of votes.entries()) {
+            results[id] = (voteCount / totalVotes) * 100;
+        }
+
+        return {
+            votes: Object.fromEntries(votes),
+            percentages: results
+        };
+    }, [candidates, voters, hasGeneratedVoters, votingMethods]);
 
     useEffect(() => {
         drawVisualization();
     }, [drawVisualization]);
+
+
+
+    const handleGenerateVoters = () => {
+        const newVoters = generateVoters(voterCount, voterDistribution);
+        setVoters(newVoters);
+        setHasGeneratedVoters(true);
+    };
 
 
     return (
@@ -542,30 +682,73 @@ export const VotingMethodViz = () => {
                 </div>
             </div>
 
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                <h3 className="font-semibold mb-2">Election Results</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {Object.entries(methods).map(([method, label]) => {
-                        const result = calculateWinner(method as keyof typeof votingMethods);
-                        const winner = candidates.find(c => c.id === result.winnerId);
-                        return (
-                            <div key={method} className={`p-3 rounded-lg border ${method === selectedMethod ? 'bg-white border-blue-500' : 'bg-white'}`}>
-                                <div className="font-medium">{label}</div>
-                                <div className="flex items-center gap-2 mt-1">
-                                    <div
-                                        className="w-3 h-3 rounded-full"
-                                        style={{ backgroundColor: winner?.color }}
-                                    />
-                                    <span>{winner?.name}</span>
-                                </div>
-                                <div className="text-sm text-gray-600">
-                                    {result.percentage.toFixed(1)}% of the area
-                                </div>
-                            </div>
-                        );
-                    })}
+            {hasGeneratedVoters ? (
+                <div className="mt-4 space-y-4">
+                    {/* Theoretical Area Coverage */}
+                    <div className="p-4 bg-gray-50 rounded-lg">
+                        <h3 className="font-semibold mb-2">Theoretical Area Coverage</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {Object.entries(methods).map(([method, label]) => {
+                                const areaResults = calculateWinningAreas(method);
+                                const winner = candidates.find(c =>
+                                    c.id === Object.entries(areaResults.percentages)
+                                        .reduce((a, b) => a[1] > b[1] ? a : b)[0]
+                                );
+
+                                return (
+                                    <div key={`area-${method}`} className={`p-3 rounded-lg border ${method === selectedMethod ? 'bg-white border-blue-500' : 'bg-white'}`}>
+                                        <div className="font-medium">{label}</div>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: winner?.color }} />
+                                            <span>{winner?.name}</span>
+                                        </div>
+                                        <div className="text-sm text-gray-600">
+                                            {areaResults.percentages[winner.id].toFixed(1)}% of map area
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Actual Voter Results */}
+                    <div className="p-4 bg-gray-50 rounded-lg">
+                        <h3 className="font-semibold mb-2">Actual Voter Results ({voters.length} voters)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {Object.entries(methods).map(([method, label]) => {
+                                const voterResults = calculateActualVotes(method);
+                                const winner = candidates.find(c =>
+                                    c.id === Object.entries(voterResults.percentages)
+                                        .reduce((a, b) => a[1] > b[1] ? a : b)[0]
+                                );
+
+                                return (
+                                    <div key={`votes-${method}`} className={`p-3 rounded-lg border ${method === selectedMethod ? 'bg-white border-blue-500' : 'bg-white'}`}>
+                                        <div className="font-medium">{label}</div>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: winner?.color }} />
+                                            <span>{winner?.name}</span>
+                                        </div>
+                                        <div className="text-sm text-gray-600">
+                                            {voterResults.votes[winner.id]} votes ({voterResults.percentages[winner.id].toFixed(1)}%)
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
                 </div>
-            </div>
+            ) : (
+                <div className="mt-4 p-4 bg-gray-100 rounded-lg text-center">
+                    <p className="text-gray-600 mb-2">Generate voters to see election results</p>
+                    <button
+                        onClick={handleGenerateVoters}
+                        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                        Generate {voterCount} Voters
+                    </button>
+                </div>
+            )}
 
             {showSettings && (
                 <div className="mb-4 p-4 bg-gray-50 rounded-lg">
@@ -700,3 +883,5 @@ export const VotingMethodViz = () => {
         </div>
     );
 };
+
+export { VotingMethodViz };
