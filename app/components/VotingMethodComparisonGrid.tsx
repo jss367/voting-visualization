@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { DEFAULT_APPROVAL_THRESHOLD, runElection, VotingMethod } from './ElectionUtils';
 
-const NORMAL_SD = 0.15;
+
 const CANVAS_SIZE = 300;
-const CHUNK_SIZE = 10; // Smaller chunks for smoother rendering
-const VOTER_RADIUS = 0.15; // Radius of voter influence
 
 interface CacheKey {
     candidates: Array<{ id: string; x: number; y: number; color: string }>;
@@ -18,20 +17,7 @@ interface ResultCache {
 // Global cache for results
 const resultCache = new Map<string, ResultCache>();
 
-// Helper function to generate normally distributed random numbers
-// const randn_bm = () => {
-//     let u = 0, v = 0;
-//     while (u === 0) u = Math.random();
-//     while (v === 0) v = Math.random();
-//     return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-// };
 
-// Calculate weighted vote based on distance
-const getWeight = (dist: number, radius: number): number => {
-    if (dist >= radius) return 0;
-    // Smooth falloff using cosine
-    return 0.5 * (1 + Math.cos(Math.PI * dist / radius));
-};
 
 const distance = (x1: number, y1: number, x2: number, y2: number): number =>
     Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
@@ -50,38 +36,6 @@ const generateCacheKey = (candidates: CacheKey['candidates'], method: string): s
     return JSON.stringify(config);
 };
 
-// Generate a fixed pattern of voter offsets in a normal distribution
-const generateVoterPattern = (count: number = 100) => {
-    const pattern: Array<{ dx: number, dy: number }> = [];
-
-    // Create a grid of points and apply inverse normal CDF
-    const gridSize = Math.ceil(Math.sqrt(count));
-    const step = 3 / gridSize; // Use 3 standard deviations
-
-    for (let i = 0; i < gridSize; i++) {
-        for (let j = 0; j < gridSize; j++) {
-            // Convert from uniform to normal distribution
-            // Using Box-Muller transform
-            const u1 = (i + 0.5) * step - 1.5; // -1.5 to 1.5
-            const u2 = (j + 0.5) * step - 1.5;
-
-            // Scale by our desired standard deviation
-            const dx = u1 * NORMAL_SD;
-            const dy = u2 * NORMAL_SD;
-
-            // Only add points within 3 standard deviations
-            if (Math.sqrt(dx * dx + dy * dy) <= 3 * NORMAL_SD) {
-                pattern.push({ dx, dy });
-            }
-        }
-    }
-
-    return pattern;
-};
-
-
-// Create our fixed voter pattern
-const VOTER_PATTERN = generateVoterPattern();
 
 const VotingMethodComparisonGrid = () => {
     const [candidates, setCandidates] = useState([
@@ -109,6 +63,31 @@ const VotingMethodComparisonGrid = () => {
         '#ec4899', '#10b981', '#6366f1', '#f97316', '#06b6d4'
     ];
 
+    const [isDarkMode, setIsDarkMode] = useState(() => {
+        if (typeof window === 'undefined') return false;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    });
+
+    // Add effect to listen for changes
+    useEffect(() => {
+        const computeBackground = () => {
+            const computedStyle = getComputedStyle(document.documentElement);
+            return computedStyle.getPropertyValue('--background');
+        };
+
+        const backgroundColor = computeBackground();
+        Object.values(canvasRefs).forEach(ref => {
+            const canvas = ref.current;
+            if (!canvas) {
+                return;
+            }
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.fillStyle = backgroundColor;
+                ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+            }
+        });
+    }, []);
     const canvasRefs = {
         plurality: useRef<HTMLCanvasElement>(null),
         approval: useRef<HTMLCanvasElement>(null),
@@ -117,61 +96,22 @@ const VotingMethodComparisonGrid = () => {
 
     const [isComputing, setIsComputing] = useState(false);
     const [isDragging, setIsDragging] = useState<string | null>(null);
-    const renderingRef = useRef(false);
     const [computeProgress, setComputeProgress] = useState(0);
 
-    const runElection = useCallback((method: string, centerX: number, centerY: number) => {
-        const votes: Record<string, number> = {};
-        candidates.forEach(c => votes[c.id] = 0);
 
-        if (method === 'plurality') {
-            // For each candidate, calculate their weighted influence at this point
-            const weights = candidates.map(candidate => ({
-                id: candidate.id,
-                weight: getWeight(distance(centerX, centerY, candidate.x, candidate.y), VOTER_RADIUS)
-            }));
-
-            // Winner is the candidate with highest weight
-            const winner = weights.reduce((a, b) => a.weight > b.weight ? a : b);
-            return winner.id;
-
-        } else if (method === 'approval') {
-            const threshold = 0.3;
-            candidates.forEach(candidate => {
-                const dist = distance(centerX, centerY, candidate.x, candidate.y);
-                if (dist <= threshold) {
-                    votes[candidate.id] = getWeight(dist, threshold);
-                }
-            });
-
-            // Winner is candidate with highest approval weight
-            return Object.entries(votes).reduce((a, b) => b[1] > a[1] ? b : a)[0];
-
-        } else if (method === 'irv') {
-            // Calculate distances to all candidates
-            const distances = candidates.map(candidate => ({
-                id: candidate.id,
-                dist: distance(centerX, centerY, candidate.x, candidate.y)
-            }));
-
-            // Sort by distance and weight by position
-            return distances
-                .sort((a, b) => a.dist - b.dist)
-                .map(c => c.id)[0];
+    const drawCanvas = useCallback((canvasRef: React.RefObject<HTMLCanvasElement>, method: VotingMethod) => {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+            return;
         }
 
-        return candidates[0].id; // Fallback
-    }, [candidates]);
-
-    const drawCanvas = useCallback((canvasRef: React.RefObject<HTMLCanvasElement>, method: string) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
         const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+        if (!ctx) {
+            return;
+        }
 
         const imageData = ctx.createImageData(CANVAS_SIZE, CANVAS_SIZE);
-        const data = imageData.data;
+        const { data } = imageData;
 
         // Pre-calculate candidate colors
         const candidateColors = candidates.reduce((acc, candidate) => {
@@ -196,7 +136,14 @@ const VotingMethodComparisonGrid = () => {
                         const px = (x + (sx + 0.5) / samples) / CANVAS_SIZE;
                         const py = 1 - (y + (sy + 0.5) / samples) / CANVAS_SIZE;
 
-                        const winnerId = runElection(method, px, py);
+                        // Use the new runElection function
+                        const winnerId = runElection(
+                            method,
+                            px,
+                            py,
+                            candidates,
+                            method === 'approval' ? DEFAULT_APPROVAL_THRESHOLD : undefined
+                        );
                         colors.set(winnerId, (colors.get(winnerId) || 0) + 1);
                     }
                 }
@@ -236,93 +183,20 @@ const VotingMethodComparisonGrid = () => {
                 0,
                 2 * Math.PI
             );
-            ctx.fillStyle = 'white';
+            ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
             ctx.fill();
             ctx.strokeStyle = candidate.color;
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            // Draw candidate label
             ctx.fillStyle = 'black';
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText(candidate.name, candidate.x * CANVAS_SIZE, (1 - candidate.y) * CANVAS_SIZE + 20);
         });
-    }, [candidates, runElection]);
+    }, [candidates]);
 
-    const computeAndCacheResults = useCallback(async (method: string, canvas: HTMLCanvasElement) => {
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
 
-        const cacheKey = generateCacheKey(candidates, method);
-        const cached = resultCache.get(cacheKey);
-
-        if (cached) {
-            ctx.putImageData(cached.imageData, 0, 0);
-            drawCandidates(ctx);
-            return;
-        }
-
-        const imageData = ctx.createImageData(CANVAS_SIZE, CANVAS_SIZE);
-        const data = imageData.data;
-
-        const candidateColors = candidates.reduce((acc, candidate) => {
-            const rgb = parseInt(candidate.color.slice(1), 16);
-            acc[candidate.id] = {
-                r: (rgb >> 16) & 255,
-                g: (rgb >> 8) & 255,
-                b: rgb & 255
-            };
-            return acc;
-        }, {} as Record<string, { r: number, g: number, b: number }>);
-
-        let x = 0;
-        let y = 0;
-
-        while (y < CANVAS_SIZE && renderingRef.current) {
-            const endX = Math.min(x + CHUNK_SIZE, CANVAS_SIZE);
-            const endY = Math.min(y + CHUNK_SIZE, CANVAS_SIZE);
-
-            for (let currentY = y; currentY < endY; currentY++) {
-                for (let currentX = x; currentX < endX; currentX++) {
-                    const centerX = currentX / CANVAS_SIZE;
-                    const centerY = 1 - (currentY / CANVAS_SIZE);
-
-                    const winnerId = runElection(method, centerX, centerY);
-                    const color = candidateColors[winnerId];
-
-                    const idx = (currentY * CANVAS_SIZE + currentX) * 4;
-                    data[idx] = color.r;
-                    data[idx + 1] = color.g;
-                    data[idx + 2] = color.b;
-                    data[idx + 3] = 255;
-                }
-            }
-
-            ctx.putImageData(imageData, 0, 0);
-
-            // Update progress
-            const progress = (y * CANVAS_SIZE + x) / (CANVAS_SIZE * CANVAS_SIZE);
-            setComputeProgress(Math.round(progress * 100));
-
-            x += CHUNK_SIZE;
-            if (x >= CANVAS_SIZE) {
-                x = 0;
-                y += CHUNK_SIZE;
-            }
-
-            // Allow UI to update
-            await new Promise(resolve => setTimeout(resolve, 0));
-        }
-
-        // Cache the result
-        resultCache.set(cacheKey, {
-            imageData: ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE),
-            timestamp: Date.now()
-        });
-
-        drawCandidates(ctx);
-    }, [candidates, runElection]);
 
     const drawCandidates = (ctx: CanvasRenderingContext2D) => {
         candidates.forEach(candidate => {
@@ -334,7 +208,7 @@ const VotingMethodComparisonGrid = () => {
                 0,
                 2 * Math.PI
             );
-            ctx.fillStyle = 'white';
+            ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
             ctx.fill();
             ctx.strokeStyle = candidate.color;
             ctx.lineWidth = 2;
@@ -350,7 +224,6 @@ const VotingMethodComparisonGrid = () => {
     const handleCompute = async () => {
         setIsComputing(true);
         setComputeProgress(0);
-        renderingRef.current = true;
 
         try {
             await Promise.all(
@@ -375,13 +248,14 @@ const VotingMethodComparisonGrid = () => {
             );
         } finally {
             setIsComputing(false);
-            renderingRef.current = false;
             setComputeProgress(100);
         }
     };
 
     const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (isComputing) return;
+        if (isComputing) {
+            return;
+        }
 
         const canvas = e.currentTarget;
         const rect = canvas.getBoundingClientRect();
@@ -401,13 +275,17 @@ const VotingMethodComparisonGrid = () => {
     const initializeCanvases = useCallback(() => {
         Object.values(canvasRefs).forEach(ref => {
             const canvas = ref.current;
-            if (!canvas) return;
+            if (!canvas) {
+                return;
+            }
 
             const ctx = canvas.getContext('2d');
-            if (!ctx) return;
+            if (!ctx) {
+                return;
+            }
 
             // Clear canvas with white background
-            ctx.fillStyle = 'white';
+            ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
             ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
             // Draw candidates
@@ -420,7 +298,7 @@ const VotingMethodComparisonGrid = () => {
                     0,
                     2 * Math.PI
                 );
-                ctx.fillStyle = 'white';
+                ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
                 ctx.fill();
                 ctx.strokeStyle = candidate.color;
                 ctx.lineWidth = 2;
@@ -441,7 +319,9 @@ const VotingMethodComparisonGrid = () => {
     }, [initializeCanvases]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!isDragging || isComputing) return;
+        if (!isDragging || isComputing) {
+            return;
+        }
 
         const canvas = e.currentTarget;
         const rect = canvas.getBoundingClientRect();
@@ -461,7 +341,9 @@ const VotingMethodComparisonGrid = () => {
     };
 
     const addCandidate = useCallback(() => {
-        if (candidates.length >= availableColors.length) return;
+        if (candidates.length >= availableColors.length) {
+            return;
+        }
 
         const newId = (Math.max(0, ...candidates.map(c => parseInt(c.id))) + 1).toString();
         const newColor = availableColors[candidates.length];
@@ -477,7 +359,9 @@ const VotingMethodComparisonGrid = () => {
     }, [candidates, availableColors]);
 
     const removeCandidate = useCallback((id: string) => {
-        if (candidates.length <= 2) return;
+        if (candidates.length <= 2) {
+            return;
+        }
         setCandidates(prev => prev.filter(c => c.id !== id));
     }, [candidates]);
 
@@ -486,7 +370,6 @@ const VotingMethodComparisonGrid = () => {
         // Reset any necessary state
         setIsComputing(false);
         setComputeProgress(0);
-        renderingRef.current = false;
 
         // Clear the cache since we're changing candidates
         resultCache.clear();
@@ -511,9 +394,9 @@ const VotingMethodComparisonGrid = () => {
     );
 
     return (
-        <div className="w-full max-w-6xl p-4 bg-white rounded-lg shadow-lg">
+        <div className="w-full max-w-6xl p-4 bg-white dark:bg-gray-800 rounded-lg shadow-lg dark:text-white">
             <div className="mb-6">
-                <h2 className="text-2xl font-bold mb-2">Voting Method Comparison</h2>
+                <h2 className="text-2xl font-bold mb-2 text-black dark:text-white">Voting Method Comparison</h2>
                 <div className="flex flex-col gap-4">
                     <div className="flex items-center gap-4">
                         <button
@@ -537,7 +420,7 @@ const VotingMethodComparisonGrid = () => {
                     <PresetControls />
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
-                    Drag candidates to reposition them, then click "Compute Results" to see the outcomes.
+                    Drag candidates to reposition them, then click &#34;Compute Results&#34; to see the outcomes.
                     Each point represents an election with voter opinions normally distributed around that point.
                 </p>
             </div>
