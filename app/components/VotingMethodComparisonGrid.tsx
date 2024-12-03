@@ -90,6 +90,20 @@ const VotingMethodComparisonGrid = () => {
         { id: '3', x: 0.7, y: 0.3, color: '#3b82f6', name: 'C' },
     ]);
 
+    // Preset configurations
+    const presets = {
+        spoiler: [
+            { id: '1', x: 0.3, y: 0.5, color: '#22c55e', name: 'Progressive A' },
+            { id: '2', x: 0.7, y: 0.5, color: '#3b82f6', name: 'Conservative' },
+            { id: '3', x: 0.4, y: 0.5, color: '#ef4444', name: 'Progressive B' },
+        ],
+        default: [
+            { id: '1', x: 0.3, y: 0.7, color: '#22c55e', name: 'A' },
+            { id: '2', x: 0.5, y: 0.5, color: '#ef4444', name: 'B' },
+            { id: '3', x: 0.7, y: 0.3, color: '#3b82f6', name: 'C' },
+        ]
+    };
+
     const availableColors = [
         '#22c55e', '#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6',
         '#ec4899', '#10b981', '#6366f1', '#f97316', '#06b6d4'
@@ -467,30 +481,62 @@ const VotingMethodComparisonGrid = () => {
         setCandidates(prev => prev.filter(c => c.id !== id));
     }, [candidates]);
 
+    const loadPreset = (presetName: keyof typeof presets) => {
+        setCandidates(presets[presetName]);
+        // Reset any necessary state
+        setIsComputing(false);
+        setComputeProgress(0);
+        renderingRef.current = false;
+
+        // Clear the cache since we're changing candidates
+        resultCache.clear();
+    };
+
+    const PresetControls = () => (
+        <div className="flex items-center gap-4 mb-4">
+            <button
+                onClick={() => loadPreset('spoiler')}
+                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors"
+                title="Demonstrates how similar candidates can split the vote"
+            >
+                Demo Spoiler Effect
+            </button>
+            <button
+                onClick={() => loadPreset('default')}
+                className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors"
+            >
+                Reset to Default
+            </button>
+        </div>
+    );
+
     return (
         <div className="w-full max-w-6xl p-4 bg-white rounded-lg shadow-lg">
             <div className="mb-6">
                 <h2 className="text-2xl font-bold mb-2">Voting Method Comparison</h2>
-                <div className="flex items-center gap-4 mb-4">
-                    <button
-                        onClick={handleCompute}
-                        disabled={isComputing}
-                        className={`px-4 py-2 rounded-lg ${isComputing
+                <div className="flex flex-col gap-4">
+                    <div className="flex items-center gap-4">
+                        <button
+                            onClick={handleCompute}
+                            disabled={isComputing}
+                            className={`px-4 py-2 rounded-lg ${isComputing
                                 ? 'bg-gray-300 cursor-not-allowed'
                                 : 'bg-blue-500 hover:bg-blue-600 text-white'
-                            }`}
-                    >
-                        {isComputing ? `Computing (${computeProgress}%)` : 'Compute Results'}
-                    </button>
-                    <button
-                        onClick={addCandidate}
-                        disabled={candidates.length >= availableColors.length || isComputing}
-                        className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                        Add Candidate
-                    </button>
+                                }`}
+                        >
+                            {isComputing ? `Computing (${computeProgress}%)` : 'Compute Results'}
+                        </button>
+                        <button
+                            onClick={addCandidate}
+                            disabled={candidates.length >= availableColors.length || isComputing}
+                            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        >
+                            Add Candidate
+                        </button>
+                    </div>
+                    <PresetControls />
                 </div>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 mt-2">
                     Drag candidates to reposition them, then click "Compute Results" to see the outcomes.
                     Each point represents an election with voter opinions normally distributed around that point.
                 </p>
