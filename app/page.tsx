@@ -1,6 +1,6 @@
 "use client"
 
-import { VotingMethodViz } from './components/VotingMethodViz'
+import { VotingMethodViz } from './components/VotingMethodViz';
 
 export default function Home() {
     return (
