@@ -10,10 +10,11 @@ export const distance = (x1: number, y1: number, x2: number, y2: number): number
 // Calculate weighted vote based on distance
 export const getWeight = (dist: number, radius: number): number => {
     if (dist >= radius) {
-      return 0;
+        return 0;
     }
-    // Smooth falloff using cosine
-    return 0.5 * (1 + Math.cos(Math.PI * dist / radius));
+    // Modified to use quadratic falloff for smoother weight distribution
+    const x = dist / radius;
+    return 1 - (x * x);
 };
 
 export type VotingMethod = 'plurality' | 'approval' | 'irv';

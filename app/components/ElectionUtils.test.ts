@@ -18,7 +18,6 @@ describe('Election utilities', () => {
             expect(getWeight(0, radius)).toBe(1); // At center
             expect(getWeight(radius, radius)).toBe(0); // At boundary
             expect(getWeight(radius * 2, radius)).toBe(0); // Outside
-            // Mid-point should have weight 0.5
             expect(getWeight(radius / 2, radius)).toBeCloseTo(0.75, 2);
         });
     });
