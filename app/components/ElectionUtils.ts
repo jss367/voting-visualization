@@ -24,12 +24,12 @@ export const runElection = (
     voterY: number,
     candidates: Candidate[],
     approvalThreshold: number = DEFAULT_APPROVAL_THRESHOLD
-): string => {
+): string | null => {
     if (candidates.length === 0) {
         throw new Error('No candidates provided');
     }
 
-    if (candidates.length === 1) {
+    if (candidates.length === 1 && method !== 'approval') {
         return candidates[0].id;
     }
 
@@ -58,8 +58,7 @@ export const runElection = (
                 .filter(([_, weight]) => weight > 0);
 
             if (approvedCandidates.length === 0) {
-                // If no candidates approved, fall back to plurality
-                return runElection('plurality', voterX, voterY, candidates);
+                return null;
             }
 
             // Return candidate with highest approval weight
@@ -97,7 +96,7 @@ export const simulateElection = (
 
     voters.forEach(voter => {
         const winnerId = runElection(method, voter.x, voter.y, candidates, approvalThreshold);
-        votes[winnerId]++;
+        if (winnerId !== null) votes[winnerId]++;
     });
 
     return votes;

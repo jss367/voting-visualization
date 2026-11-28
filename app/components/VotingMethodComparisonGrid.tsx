@@ -144,14 +144,15 @@ const VotingMethodComparisonGrid = () => {
                             candidates,
                             method === 'approval' ? DEFAULT_APPROVAL_THRESHOLD : undefined
                         );
-                        colors.set(winnerId, (colors.get(winnerId) || 0) + 1);
+                        const colorKey = winnerId ?? 'unapproved';
+                        colors.set(colorKey, (colors.get(colorKey) || 0) + 1);
                     }
                 }
 
                 // Blend colors based on sample counts
                 let r = 0, g = 0, b = 0;
                 for (const [id, count] of colors.entries()) {
-                    const color = candidateColors[id];
+                    const color = candidateColors[id] ?? { r: 209, g: 213, b: 219 };
                     const weight = count / (samples * samples);
                     r += color.r * weight;
                     g += color.g * weight;
@@ -421,7 +422,7 @@ const VotingMethodComparisonGrid = () => {
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
                     Drag candidates to reposition them, then click &#34;Compute Results&#34; to see the outcomes.
-                    Each point represents an election with voter opinions normally distributed around that point.
+                    Each location shows the choice of a voter at that point. Gray means no candidate received approval.
                 </p>
             </div>
 

@@ -19,7 +19,7 @@ describe('Election utilities', () => {
             expect(getWeight(radius, radius)).toBe(0); // At boundary
             expect(getWeight(radius * 2, radius)).toBe(0); // Outside
             // Mid-point should have weight 0.5
-            expect(getWeight(radius / 2, radius)).toBeCloseTo(0.75, 2);
+            expect(getWeight(radius / 2, radius)).toBeCloseTo(0.5, 2);
         });
     });
 
@@ -74,11 +74,11 @@ describe('Election utilities', () => {
                 expect(runElection('approval', 0.45, 0.55, defaultCandidates, threshold)).toBe('2');
             });
 
-            test('falls back to plurality when no candidates within threshold', () => {
+            test('has no approval winner when everyone is outside the threshold', () => {
                 const threshold = 0.1; // Very small threshold
                 const result = runElection('approval', 0.4, 0.4, defaultCandidates, threshold);
-                // Should choose closest candidate
-                expect(result).toBe('2');
+                expect(result).toBeNull();
+                expect(runElection('approval', 0.4, 0.4, [...defaultCandidates].reverse(), threshold)).toBeNull();
             });
         });
 
