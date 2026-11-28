@@ -1,103 +1,83 @@
-import { Candidate } from './types';
+import type { Candidate } from './types';
+import { getVoterPreference } from './votingMethods';
 
-export const VOTER_RADIUS = 0.15; // Radius of voter influence
+type Point = Pick<Candidate, 'x' | 'y'>;
+export type VotingMethod = 'plurality' | 'approval' | 'irv';
+export type Winners = Record<VotingMethod, string | null>;
+
 export const DEFAULT_APPROVAL_THRESHOLD = 0.3;
 
-// Calculate distance between two points
-export const distance = (x1: number, y1: number, x2: number, y2: number): number =>
-    Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-
-// Calculate weighted vote based on distance
-export const getWeight = (dist: number, radius: number): number => {
-    if (dist >= radius) {
-      return 0;
-    }
-    // Smooth falloff using cosine
+export function getWeight(dist: number, radius: number): number {
+    if (dist >= radius) return 0;
     return 0.5 * (1 + Math.cos(Math.PI * dist / radius));
-};
+}
 
-export type VotingMethod = 'plurality' | 'approval' | 'irv';
+// Midpoints of five equal-probability bands of a standard normal distribution.
+// Their Cartesian product gives 25 equally weighted, repeatable voter positions.
+const quantiles = [-1.28155, -0.52440, 0, 0.52440, 1.28155];
+const spread = 0.15;
+const offsets = quantiles.flatMap(x => quantiles.map(y => ({ x: x * spread, y: y * spread })));
 
-export const runElection = (
-    method: VotingMethod,
-    voterX: number,
-    voterY: number,
+export function electorateAt(x: number, y: number): Point[] {
+    return offsets.map(offset => ({
+        x: Math.max(0, Math.min(1, x + offset.x)),
+        y: Math.max(0, Math.min(1, y + offset.y)),
+    }));
+}
+
+// Counts are in candidate ID order. On a tie the lower ID takes precedence.
+function leader(counts: Map<string, number>): string | null {
+    let winner = null;
+    let highest = 0;
+    for (const [id, count] of counts) {
+        if (count > highest) {
+            winner = id;
+            highest = count;
+        }
+    }
+    return winner;
+}
+
+export function runElection(
+    voters: Point[],
     candidates: Candidate[],
-    approvalThreshold: number = DEFAULT_APPROVAL_THRESHOLD
-): string | null => {
-    if (candidates.length === 0) {
-        throw new Error('No candidates provided');
-    }
-
-    if (candidates.length === 1 && method !== 'approval') {
-        return candidates[0].id;
-    }
-
-    switch (method) {
-        case 'plurality': {
-            // Calculate weights for all candidates
-            const weights = candidates.map(candidate => ({
-                id: candidate.id,
-                weight: getWeight(distance(voterX, voterY, candidate.x, candidate.y), VOTER_RADIUS)
-            }));
-
-            // Return the candidate with highest weight
-            return weights.reduce((a, b) => a.weight > b.weight ? a : b).id;
+    approvalThreshold = DEFAULT_APPROVAL_THRESHOLD
+): Winners {
+    if (!candidates.length) throw new Error('No candidates provided');
+    const ordered = [...candidates].sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+    const firstChoices = new Map(ordered.map(c => [c.id, 0]));
+    const approvals = new Map(firstChoices);
+    const ballots = voters.map(voter => {
+        const preferences = getVoterPreference(voter.x, voter.y, ordered);
+        const first = preferences[0].id;
+        firstChoices.set(first, firstChoices.get(first)! + 1);
+        for (const { id, dist } of preferences) {
+            // Every positive approval counts as one ballot mark.
+            if (getWeight(dist, approvalThreshold) > 0) approvals.set(id, approvals.get(id)! + 1);
         }
-
-        case 'approval': {
-            const votes: Record<string, number> = {};
-            candidates.forEach(candidate => {
-                const dist = distance(voterX, voterY, candidate.x, candidate.y);
-                votes[candidate.id] = dist <= approvalThreshold ? 
-                    getWeight(dist, approvalThreshold) : 0;
-            });
-
-            // Find candidates with non-zero votes
-            const approvedCandidates = Object.entries(votes)
-                .filter(([_, weight]) => weight > 0);
-
-            if (approvedCandidates.length === 0) {
-                return null;
-            }
-
-            // Return candidate with highest approval weight
-            return approvedCandidates
-                .reduce((a, b) => b[1] > a[1] ? b : a)[0];
-        }
-
-        case 'irv': {
-            // Calculate distances to all candidates
-            const ranks = candidates
-                .map(candidate => ({
-                    id: candidate.id,
-                    dist: distance(voterX, voterY, candidate.x, candidate.y)
-                }))
-                .sort((a, b) => a.dist - b.dist);
-
-            // In single-voter scenario, just return closest candidate
-            return ranks[0].id;
-        }
-
-        default:
-            throw new Error(`Unsupported voting method: ${method}`);
-    }
-};
-
-// Helper function to simulate an election with multiple voters
-export const simulateElection = (
-    method: VotingMethod,
-    voters: Array<{ x: number, y: number }>,
-    candidates: Candidate[],
-    approvalThreshold: number = DEFAULT_APPROVAL_THRESHOLD
-): Record<string, number> => {
-    const votes: Record<string, number> = {};
-    candidates.forEach(c => votes[c.id] = 0);
-
-    voters.forEach(voter => {
-        const winnerId = runElection(method, voter.x, voter.y, candidates, approvalThreshold);
-        if (winnerId !== null) votes[winnerId]++;
+        return preferences.map(p => p.id);
     });
 
-    return votes;
-};
+    const plurality = leader(firstChoices);
+    let counts = firstChoices;
+    let irv = plurality;
+    while (irv !== null && counts.get(irv)! <= ballots.length / 2 && counts.size > 1) {
+        let lowest = Infinity;
+        let eliminated = irv;
+        for (const [id, count] of counts) {
+            if (count <= lowest) {
+                lowest = count;
+                eliminated = id;
+            }
+        }
+        counts = new Map(counts);
+        counts.delete(eliminated);
+        for (const id of counts.keys()) counts.set(id, 0);
+        for (const ballot of ballots) {
+            const next = ballot.find(id => counts.has(id))!;
+            counts.set(next, counts.get(next)! + 1);
+        }
+        irv = leader(counts);
+    }
+    return { plurality, approval: leader(approvals), irv };
+}

@@ -1,41 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_APPROVAL_THRESHOLD, runElection, VotingMethod } from './ElectionUtils';
-
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { electorateAt, runElection, type VotingMethod } from './ElectionUtils';
+import { distance, methods } from './votingMethods';
 
 const CANVAS_SIZE = 300;
+const CELL_SIZE = 4;
+const NEUTRAL = '#d1d5db';
+const comparisonMethods: VotingMethod[] = ['plurality', 'approval', 'irv'];
 
-interface CacheKey {
-    candidates: Array<{ id: string; x: number; y: number; color: string }>;
-    method: string;
-}
-
-interface ResultCache {
-    imageData: ImageData;
-    timestamp: number;
-}
-
-// Global cache for results
-const resultCache = new Map<string, ResultCache>();
-
-
-
-const distance = (x1: number, y1: number, x2: number, y2: number): number =>
-    Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-
-// Generate cache key from current configuration
-const generateCacheKey = (candidates: CacheKey['candidates'], method: string): string => {
-    const config = {
-        candidates: candidates.map(c => ({
-            id: c.id,
-            x: Math.round(c.x * 100) / 100, // Round to 2 decimal places for cache efficiency
-            y: Math.round(c.y * 100) / 100,
-            color: c.color
-        })),
-        method
-    };
-    return JSON.stringify(config);
-};
-
+const availableColors = [
+        '#22c55e', '#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6',
+        '#ec4899', '#10b981', '#6366f1', '#f97316', '#06b6d4'
+    ];
 
 const VotingMethodComparisonGrid = () => {
     const [candidates, setCandidates] = useState([
@@ -58,198 +33,67 @@ const VotingMethodComparisonGrid = () => {
         ]
     };
 
-    const availableColors = [
-        '#22c55e', '#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6',
-        '#ec4899', '#10b981', '#6366f1', '#f97316', '#06b6d4'
-    ];
-
-    const [isDarkMode, setIsDarkMode] = useState(() => {
-        if (typeof window === 'undefined') return false;
-        return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    });
-
-    // Add effect to listen for changes
-    useEffect(() => {
-        const computeBackground = () => {
-            const computedStyle = getComputedStyle(document.documentElement);
-            return computedStyle.getPropertyValue('--background');
-        };
-
-        const backgroundColor = computeBackground();
-        Object.values(canvasRefs).forEach(ref => {
-            const canvas = ref.current;
-            if (!canvas) {
-                return;
-            }
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.fillStyle = backgroundColor;
-                ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-            }
-        });
-    }, []);
-    const canvasRefs = {
-        plurality: useRef<HTMLCanvasElement>(null),
-        approval: useRef<HTMLCanvasElement>(null),
-        irv: useRef<HTMLCanvasElement>(null)
-    };
+    const plurality = useRef<HTMLCanvasElement>(null);
+    const approval = useRef<HTMLCanvasElement>(null);
+    const irv = useRef<HTMLCanvasElement>(null);
+    const canvasRefs = useMemo(() => ({ plurality, approval, irv }), []);
+    const activeRun = useRef(0);
+    useEffect(() => () => { activeRun.current++; }, []);
 
     const [isComputing, setIsComputing] = useState(false);
     const [isDragging, setIsDragging] = useState<string | null>(null);
     const [computeProgress, setComputeProgress] = useState(0);
 
 
-    const drawCanvas = useCallback((canvasRef: React.RefObject<HTMLCanvasElement>, method: VotingMethod) => {
-        const canvas = canvasRef.current;
-        if (!canvas) {
-            return;
-        }
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-            return;
-        }
-
-        const imageData = ctx.createImageData(CANVAS_SIZE, CANVAS_SIZE);
-        const { data } = imageData;
-
-        // Pre-calculate candidate colors
-        const candidateColors = candidates.reduce((acc, candidate) => {
-            const rgb = parseInt(candidate.color.slice(1), 16);
-            acc[candidate.id] = {
-                r: (rgb >> 16) & 255,
-                g: (rgb >> 8) & 255,
-                b: rgb & 255
-            };
-            return acc;
-        }, {} as Record<string, { r: number, g: number, b: number }>);
-
-        // Draw with anti-aliasing
-        for (let y = 0; y < CANVAS_SIZE; y += 1) {
-            for (let x = 0; x < CANVAS_SIZE; x += 1) {
-                // Use supersampling for anti-aliasing
-                const samples = 4;
-                const colors = new Map<string, number>();
-
-                for (let sx = 0; sx < samples; sx++) {
-                    for (let sy = 0; sy < samples; sy++) {
-                        const px = (x + (sx + 0.5) / samples) / CANVAS_SIZE;
-                        const py = 1 - (y + (sy + 0.5) / samples) / CANVAS_SIZE;
-
-                        // Use the new runElection function
-                        const winnerId = runElection(
-                            method,
-                            px,
-                            py,
-                            candidates,
-                            method === 'approval' ? DEFAULT_APPROVAL_THRESHOLD : undefined
-                        );
-                        const colorKey = winnerId ?? 'unapproved';
-                        colors.set(colorKey, (colors.get(colorKey) || 0) + 1);
-                    }
-                }
-
-                // Blend colors based on sample counts
-                let r = 0, g = 0, b = 0;
-                for (const [id, count] of colors.entries()) {
-                    const color = candidateColors[id] ?? { r: 209, g: 213, b: 219 };
-                    const weight = count / (samples * samples);
-                    r += color.r * weight;
-                    g += color.g * weight;
-                    b += color.b * weight;
-                }
-
-                const idx = (y * CANVAS_SIZE + x) * 4;
-                data[idx] = r;
-                data[idx + 1] = g;
-                data[idx + 2] = b;
-                data[idx + 3] = 255;
-            }
-
-            // Update progress more frequently
-            if (y % 10 === 0) {
-                ctx.putImageData(imageData, 0, 0);
-            }
-        }
-
-        ctx.putImageData(imageData, 0, 0);
-
-        // Draw candidates
-        candidates.forEach(candidate => {
+    const drawCandidates = useCallback((ctx: CanvasRenderingContext2D) => {
+        for (const candidate of candidates) {
+            const x = candidate.x * CANVAS_SIZE;
+            const y = (1 - candidate.y) * CANVAS_SIZE;
             ctx.beginPath();
-            ctx.arc(
-                candidate.x * CANVAS_SIZE,
-                (1 - candidate.y) * CANVAS_SIZE,
-                6,
-                0,
-                2 * Math.PI
-            );
-            ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
+            ctx.arc(x, y, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = 'white';
             ctx.fill();
             ctx.strokeStyle = candidate.color;
             ctx.lineWidth = 2;
             ctx.stroke();
-
             ctx.fillStyle = 'black';
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(candidate.name, candidate.x * CANVAS_SIZE, (1 - candidate.y) * CANVAS_SIZE + 20);
-        });
+            ctx.fillText(candidate.name, x, y + 20);
+        }
     }, [candidates]);
 
-
-
-    const drawCandidates = (ctx: CanvasRenderingContext2D) => {
-        candidates.forEach(candidate => {
-            ctx.beginPath();
-            ctx.arc(
-                candidate.x * CANVAS_SIZE,
-                (1 - candidate.y) * CANVAS_SIZE,
-                6,
-                0,
-                2 * Math.PI
-            );
-            ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
-            ctx.fill();
-            ctx.strokeStyle = candidate.color;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            ctx.fillStyle = 'black';
-            ctx.font = '12px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(candidate.name, candidate.x * CANVAS_SIZE, (1 - candidate.y) * CANVAS_SIZE + 20);
-        });
-    };
-
     const handleCompute = async () => {
+        const run = ++activeRun.current;
+        const panels = comparisonMethods.map(method => ({
+            method, ctx: canvasRefs[method].current?.getContext('2d'),
+        }));
+        const colors = new Map(candidates.map(c => [c.id, c.color]));
         setIsComputing(true);
         setComputeProgress(0);
-
         try {
-            await Promise.all(
-                Object.entries(canvasRefs).map(async ([method, ref]) => {
-                    if (ref.current) {
-                        // Check cache first
-                        const cacheKey = generateCacheKey(candidates, method);
-                        const cached = resultCache.get(cacheKey);
-
-                        if (cached) {
-                            const ctx = ref.current.getContext('2d');
-                            if (ctx) {
-                                ctx.putImageData(cached.imageData, 0, 0);
-                                drawCandidates(ctx); // Redraw candidates on top
-                            }
-                        } else {
-                            // Compute new results
-                            await drawCanvas(ref, method);
-                        }
+            for (let y = 0; y < CANVAS_SIZE; y += CELL_SIZE) {
+                if (y % (CELL_SIZE * 5) === 0) {
+                    setComputeProgress(Math.round(100 * y / CANVAS_SIZE));
+                    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+                    if (activeRun.current !== run) return;
+                }
+                for (let x = 0; x < CANVAS_SIZE; x += CELL_SIZE) {
+                    const voters = electorateAt((x + CELL_SIZE / 2) / CANVAS_SIZE, 1 - (y + CELL_SIZE / 2) / CANVAS_SIZE);
+                    const winners = runElection(voters, candidates);
+                    for (const { method, ctx } of panels) {
+                        if (!ctx) continue;
+                        const winner = winners[method];
+                        ctx.fillStyle = winner === null ? NEUTRAL : colors.get(winner)!;
+                        ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
                     }
-                })
-            );
+                }
+            }
+            for (const { ctx } of panels) {
+                if (ctx) drawCandidates(ctx);
+            }
         } finally {
-            setIsComputing(false);
-            setComputeProgress(100);
+            if (activeRun.current === run) setIsComputing(false);
         }
     };
 
@@ -273,51 +117,15 @@ const VotingMethodComparisonGrid = () => {
         }
     };
 
-    const initializeCanvases = useCallback(() => {
-        Object.values(canvasRefs).forEach(ref => {
-            const canvas = ref.current;
-            if (!canvas) {
-                return;
-            }
-
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-                return;
-            }
-
-            // Clear canvas with white background
-            ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
-            ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-
-            // Draw candidates
-            candidates.forEach(candidate => {
-                ctx.beginPath();
-                ctx.arc(
-                    candidate.x * CANVAS_SIZE,
-                    (1 - candidate.y) * CANVAS_SIZE,
-                    6,
-                    0,
-                    2 * Math.PI
-                );
-                ctx.fillStyle = isDarkMode ? '#1f2937' : 'white';
-                ctx.fill();
-                ctx.strokeStyle = candidate.color;
-                ctx.lineWidth = 2;
-                ctx.stroke();
-
-                // Draw candidate label
-                ctx.fillStyle = 'black';
-                ctx.font = '12px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText(candidate.name, candidate.x * CANVAS_SIZE, (1 - candidate.y) * CANVAS_SIZE + 20);
-            });
-        });
-    }, [candidates]);
-
-    // Call initializeCanvases when component mounts and when candidates change
     useEffect(() => {
-        initializeCanvases();
-    }, [initializeCanvases]);
+        for (const ref of Object.values(canvasRefs)) {
+            const ctx = ref.current?.getContext('2d');
+            if (!ctx) continue;
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+            drawCandidates(ctx);
+        }
+    }, [drawCandidates, canvasRefs]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
         if (!isDragging || isComputing) {
@@ -333,9 +141,7 @@ const VotingMethodComparisonGrid = () => {
             prev.map(c => c.id === isDragging ? { ...c, x, y } : c)
         );
 
-        // Just redraw candidates without election results
-        initializeCanvases();
-    }, [isDragging, isComputing, initializeCanvases]);
+    }, [isDragging, isComputing]);
 
     const handleMouseUp = () => {
         setIsDragging(null);
@@ -347,8 +153,8 @@ const VotingMethodComparisonGrid = () => {
         }
 
         const newId = (Math.max(0, ...candidates.map(c => parseInt(c.id))) + 1).toString();
-        const newColor = availableColors[candidates.length];
-        const letter = String.fromCharCode(65 + candidates.length);
+        const newColor = availableColors.find(color => candidates.every(candidate => candidate.color !== color))!;
+        const letter = String.fromCharCode(64 + Number(newId));
 
         setCandidates(prev => [...prev, {
             id: newId,
@@ -357,7 +163,7 @@ const VotingMethodComparisonGrid = () => {
             color: newColor,
             name: letter
         }]);
-    }, [candidates, availableColors]);
+    }, [candidates]);
 
     const removeCandidate = useCallback((id: string) => {
         if (candidates.length <= 2) {
@@ -368,17 +174,16 @@ const VotingMethodComparisonGrid = () => {
 
     const loadPreset = (presetName: keyof typeof presets) => {
         setCandidates(presets[presetName]);
-        // Reset any necessary state
         setIsComputing(false);
         setComputeProgress(0);
 
-        // Clear the cache since we're changing candidates
-        resultCache.clear();
+
     };
 
     const PresetControls = () => (
         <div className="flex items-center gap-4 mb-4">
             <button
+                disabled={isComputing}
                 onClick={() => loadPreset('spoiler')}
                 className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors"
                 title="Demonstrates how similar candidates can split the vote"
@@ -386,6 +191,7 @@ const VotingMethodComparisonGrid = () => {
                 Demo Spoiler Effect
             </button>
             <button
+                disabled={isComputing}
                 onClick={() => loadPreset('default')}
                 className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors"
             >
@@ -422,16 +228,19 @@ const VotingMethodComparisonGrid = () => {
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
                     Drag candidates to reposition them, then click &#34;Compute Results&#34; to see the outcomes.
-                    Each location shows the choice of a voter at that point. Gray means no candidate received approval.
+                    Each cell centers the same pattern of 25 nearby voters on all three maps.
+                    Plurality counts first choices. Approval counts every candidate within 0.3 map units of each voter
+                    (gray means no approvals). Instant runoff eliminates the last-place candidate and transfers ballots
+                    until one wins. Ties favor the earlier-created candidate.
                 </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {Object.entries(canvasRefs).map(([method, ref]) => (
+                {comparisonMethods.map((method) => (
                     <div key={method}>
-                        <h3 className="text-lg font-semibold mb-2 capitalize">{method}</h3>
+                        <h3 className="text-lg font-semibold mb-2 capitalize">{methods[method]}</h3>
                         <canvas
-                            ref={ref}
+                            ref={canvasRefs[method]}
                             width={CANVAS_SIZE}
                             height={CANVAS_SIZE}
                             className="border rounded w-full cursor-move touch-none"
