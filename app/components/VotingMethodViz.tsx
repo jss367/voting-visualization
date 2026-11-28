@@ -11,19 +11,19 @@ import {
 } from './votingMethods';
 
 const VotingMethodViz = () => {
-    const canvasRef = useRef(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
     const [candidates, setCandidates] = useState([
         { id: '1', x: 0.3, y: 0.7, color: '#22c55e', name: 'Candidate A' },
         { id: '2', x: 0.5, y: 0.5, color: '#ef4444', name: 'Candidate B' },
         { id: '3', x: 0.7, y: 0.3, color: '#3b82f6', name: 'Candidate C' },
     ]);
     const [selectedMethod, setSelectedMethod] = useState('plurality');
-    const [isDragging, setIsDragging] = useState(null);
+    const [isDragging, setIsDragging] = useState<string | null>(null);
     const [approvalThreshold, setApprovalThreshold] = useState(0.3);
     const [showSettings, setShowSettings] = useState(false);
-    const [voters, setVoters] = useState([]);
+    const [voters, setVoters] = useState<Voter[]>([]);
     const [voterCount, setVoterCount] = useState(10000);
-    const [voterDistribution, setVoterDistribution] = useState('uniform');
+    const [voterDistribution, setVoterDistribution] = useState<'uniform' | 'normal' | 'clustered'>('uniform');
     const [hasGeneratedVoters, setHasGeneratedVoters] = useState(false);
 
     const availableColors = [
@@ -300,7 +300,7 @@ const VotingMethodViz = () => {
             for (let y = 0; y < samplePoints; y++) {
                 const voterX = x / (samplePoints - 1);
                 const voterY = y / (samplePoints - 1);
-                const voteResult = votingMethods[method](voterX, voterY, candidates, method === 'approval' ? approvalThreshold : undefined);
+                const voteResult = votingMethods[method](voterX, voterY, candidates, method === 'approval' ? approvalThreshold : 0.3);
 
                 if (method === 'approval') {
                     // For approval, count all approved candidates
@@ -322,7 +322,7 @@ const VotingMethodViz = () => {
 
         // Special handling for IRV
         if (method === 'irv') {
-            let remainingCandidates = new Set(candidates.map(c => c.id));
+            const remainingCandidates = new Set(candidates.map(c => c.id));
 
             while (remainingCandidates.size > 1) {
                 const roundVotes = new Map<string, number>();
@@ -359,7 +359,7 @@ const VotingMethodViz = () => {
 
             // If we get here without finding a majority winner, the last remaining candidate wins
             if (remainingCandidates.size === 1) {
-                const winner = remainingCandidates.values().next().value;
+                const winner = Array.from(remainingCandidates)[0];
                 votes.clear();
                 candidates.forEach(c => votes.set(c.id, 0));
                 votes.set(winner, samplePoints * samplePoints);
@@ -381,7 +381,7 @@ const VotingMethodViz = () => {
             votes: Object.fromEntries(votes),
             percentages: results
         };
-    }, [candidates, votingMethods, approvalThreshold]);
+    }, [candidates, approvalThreshold]);
 
     const calculateActualVotes = useCallback((method: keyof typeof votingMethods) => {
         if (!hasGeneratedVoters || voters.length === 0) return null;
@@ -429,7 +429,7 @@ const VotingMethodViz = () => {
             }
         } else {
             voters.forEach(voter => {
-                const voteResult = votingMethods[method](voter.x, voter.y, candidates, method === 'approval' ? approvalThreshold : undefined);
+                const voteResult = votingMethods[method](voter.x, voter.y, candidates, method === 'approval' ? approvalThreshold : 0.3);
                 if (method === 'approval') {
                     voteResult.forEach(id => votes.set(id, votes.get(id)! + 1));
                 } else if (method === 'borda') {
@@ -457,7 +457,7 @@ const VotingMethodViz = () => {
             votes: Object.fromEntries(votes),
             percentages: results
         };
-    }, [candidates, voters, hasGeneratedVoters, votingMethods]);
+    }, [candidates, voters, hasGeneratedVoters, approvalThreshold]);
 
     useEffect(() => {
         drawVisualization();
@@ -509,12 +509,13 @@ const VotingMethodViz = () => {
                         <h3 className="font-semibold mb-2">Theoretical Area Coverage</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {Object.entries(methods).map(([method, label]) => {
-                                const areaResults = calculateWinningAreas(method);
+                                const areaResults = calculateWinningAreas(method as keyof typeof methods);
                                 const winner = candidates.find(c =>
                                     c.id === Object.entries(areaResults.percentages)
                                         .reduce((a, b) => a[1] > b[1] ? a : b)[0]
                                 );
 
+                                if (!winner) return null;
                                 return (
                                     <div key={`area-${method}`} className={`p-3 rounded-lg border ${method === selectedMethod ? 'bg-white border-blue-500' : 'bg-white'}`}>
                                         <div className="font-medium">{label}</div>
@@ -536,12 +537,14 @@ const VotingMethodViz = () => {
                         <h3 className="font-semibold mb-2">Actual Voter Results ({voters.length} voters)</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {Object.entries(methods).map(([method, label]) => {
-                                const voterResults = calculateActualVotes(method);
+                                const voterResults = calculateActualVotes(method as keyof typeof methods);
+                                if (!voterResults) return null;
                                 const winner = candidates.find(c =>
                                     c.id === Object.entries(voterResults.percentages)
                                         .reduce((a, b) => a[1] > b[1] ? a : b)[0]
                                 );
 
+                                if (!winner) return null;
                                 return (
                                     <div key={`votes-${method}`} className={`p-3 rounded-lg border ${method === selectedMethod ? 'bg-white border-blue-500' : 'bg-white'}`}>
                                         <div className="font-medium">{label}</div>
